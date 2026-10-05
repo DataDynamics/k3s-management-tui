@@ -1,0 +1,38 @@
+# 키 매핑. 바꾸고 싶은 항목만 적으면 내장 기본값을 덮어씁니다.
+# 키 이름 예: a, A, enter, esc, tab, shift+tab, ctrl+r, up, down, pgup, pgdown, home, end, space
+
+global:
+  quit: [q, ctrl+c]          # 하위 화면에서 q는 뒤로
+  help: ["?"]
+  filter: ["/"]
+  command: [":"]
+  namespace: [n]
+  back: [esc]
+  refresh: [ctrl+r]
+  next_source: [tab, "]"]
+  prev_source: [shift+tab, "["]
+  up: [up, k]
+  down: [down, j]
+  page_up: [pgup, ctrl+b]
+  page_down: [pgdown, ctrl+f]
+  top: [home, g]
+  bottom: [end, G]
+  left: [left, h]
+  right: [right]
+
+# 작업 키 (작업 ID: [키...]). 작업 ID는 화면에서 ?를 누르면 괄호 안에 표시됩니다.
+# 위 global의 이동 키(j, k, g, G)와 겹치지 않게 지정하세요.
+actions:
+  describe: [d, enter]
+  yaml: [y]
+  edit: [e]
+  delete: [x]
+  logs: [l]
+  logs_previous: [L]
+  shell: [s]
+  portforward: [p]
+  scale: [S]
+  restart: [r]
+  # cordon: [c]
+  # drain: [D]
+  # backup_now: [b]

@@ -1,0 +1,46 @@
+# k3stui 메인 설정
+# 이 파일이 없어도 내장 기본값으로 동작합니다. 바꾸고 싶은 값만 남겨도 됩니다.
+# 탐색 순서: --config → $K3STUI_CONF → <설치 경로>/conf/k3stui.yaml → /etc/k3stui/k3stui.yaml
+
+k3s:
+  config_file: /etc/rancher/k3s/config.yaml
+  kubeconfig: /etc/rancher/k3s/k3s.yaml
+  service_name: k3s                 # agent 노드면 k3s-agent
+  binary: /usr/local/bin/k3s
+  data_dir: auto                    # auto = config.yaml의 data-dir 사용, 없으면 /var/lib/rancher/k3s
+
+ui:
+  refresh_interval: 2s              # 메트릭·호스트 상태·AGE 갱신 주기 (리소스 목록은 watch로 즉시 반영)
+  default_namespace: all
+  default_view: dashboard           # dashboard | workloads | network | storage | config | host | helm
+  theme: dark                       # dark | light (색상은 theme.yaml)
+  log_tail_lines: 500               # 로그·journal을 열 때 처음 가져올 줄 수
+  max_log_lines: 20000              # 로그 화면에 보관할 최대 줄 수
+
+safety:
+  read_only: false                  # true면 모든 변경 작업 비활성화 (--read-only와 같음)
+  confirm_destructive: true         # 삭제·재시작·drain 전에 y/N 확인
+  # 이 네임스페이스의 리소스를 변경할 때는 리소스 이름을 다시 입력해야 합니다.
+  protected_namespaces: [kube-system, kube-public, kube-node-lease]
+
+backup:
+  dir: /data2/k3stui-backups        # 데이터스토어(SQLite/etcd) 백업 위치
+  keep: 7                           # 보관 개수 (넘으면 오래된 것부터 삭제)
+
+portforward:
+  address: 127.0.0.1                # 0.0.0.0으로 바꾸면 외부에서 접근 가능 (주의)
+
+tools:
+  kubectl: ""                       # 비우면 "<k3s.binary> kubectl"
+  helm: helm
+  systemctl: systemctl
+  journalctl: journalctl
+  editor: ""                        # 비우면 $EDITOR → $VISUAL → vi
+  timeout: 30s                      # 외부 명령 기본 타임아웃
+
+logging:
+  file: /var/log/k3stui/k3stui.log  # 쓸 수 없으면 ~/.local/state/k3stui/ 로 대체
+  level: info                       # debug | info | warn | error
+
+audit:
+  file: /var/log/k3stui/audit.log   # 변경 작업 기록 (JSON Lines)

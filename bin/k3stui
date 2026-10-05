@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# k3stui 런처: 설치 경로 확인 → 권한 확인 → 바이너리 실행.
+# 로직은 바이너리에 있고, 이 스크립트는 환경만 맞춥니다.
+set -euo pipefail
+
+BASE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+export K3STUI_HOME="${K3STUI_HOME:-$BASE}"
+
+# 설치본(libexec) → 저장소 빌드본(build) 순으로 찾습니다.
+BIN=""
+for c in "$BASE/libexec/k3stui" "$BASE/build/k3stui"; do
+  if [[ -x "$c" ]]; then BIN="$c"; break; fi
+done
+if [[ -z "$BIN" ]]; then
+  if [[ -d "$BASE/src" ]]; then
+    echo "k3stui: 바이너리가 없어 빌드합니다…" >&2
+    "$BASE/bin/build.sh" >&2
+    BIN="$BASE/build/k3stui"
+  else
+    echo "k3stui: 실행 파일을 찾을 수 없습니다 ($BASE/libexec/k3stui)" >&2
+    exit 1
+  fi
+fi
+
+# 도움말·버전은 권한 확인 없이 실행
+for a in "$@"; do
+  case "$a" in
+    -h|--help|-help|--version|-version) exec "$BIN" "$@" ;;
+  esac
+done
+
+# K3S kubeconfig(/etc/rancher/k3s/k3s.yaml)는 기본 0600이라 root만 읽을 수 있습니다.
+if [[ $EUID -ne 0 ]]; then
+  has_kc=0
+  for a in "$@"; do [[ "$a" == --kubeconfig* || "$a" == -kubeconfig* ]] && has_kc=1; done
+  if [[ $has_kc -eq 0 && ( -z "${KUBECONFIG:-}" || ! -r "${KUBECONFIG:-}" ) ]]; then
+    cat >&2 <<MSG
+k3stui: root 권한이 필요합니다.
+
+  sudo $0 $*
+
+일반 사용자로 Kubernetes 리소스만 보려면 읽을 수 있는 kubeconfig를 지정하세요
+(호스트 관리 기능은 비활성화됩니다):
+
+  $0 --kubeconfig ~/.kube/config
+MSG
+    exit 1
+  fi
+fi
+
+exec "$BIN" "$@"

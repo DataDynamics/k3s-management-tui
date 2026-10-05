@@ -1,0 +1,9 @@
+resource: deployments
+columns:
+  - name: NAME
+  - name: READY
+  - name: STRATEGY
+    path: spec.strategy.type
+  - name: IMAGES
+    width: 80
+  - name: AGE

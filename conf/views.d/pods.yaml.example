@@ -1,0 +1,14 @@
+resource: pods
+columns:
+  - name: NAME
+  - name: READY
+  - name: STATUS
+  - name: RESTARTS
+  - name: CPU
+  - name: MEM
+  - name: QOS
+    path: status.qosClass
+  - name: SA
+    path: spec.serviceAccountName
+  - name: NODE
+  - name: AGE

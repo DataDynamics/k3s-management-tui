@@ -1,9 +1,16 @@
+# Deployments 컬럼 재정의 예제
+# 사용하려면 deployments.yaml로 이름을 바꾸세요.
+#
+# 내장 컬럼: NAME, READY, UP-TO-DATE, AVAILABLE, IMAGES, AGE
 resource: deployments
 columns:
   - name: NAME
   - name: READY
-  - name: STRATEGY
+  - name: STRATEGY                              # RollingUpdate / Recreate
     path: spec.strategy.type
+  - name: SELECTOR                              # app=web,tier=front 형식
+    path: spec.selector.matchLabels
+    width: 40
   - name: IMAGES
-    width: 80
+    width: 100                                  # 내장 최대 폭(60)보다 넓게 봅니다. -1이면 제한 없음
   - name: AGE

@@ -62,7 +62,15 @@ func (s *ResourceSource) Columns(env *Env) []kube.Column {
 	}
 	out := make([]kube.Column, len(ov.Columns))
 	for i, c := range ov.Columns {
-		out[i] = kube.Column{Name: strings.ToUpper(c.Name), MaxWidth: c.Width}
+		col := kube.Column{Name: strings.ToUpper(c.Name), MaxWidth: c.Width}
+		// width를 적지 않은 내장 컬럼은 내장 최대 폭을 그대로 씁니다.
+		if j := builtinIndex(s.Def, c.Name); c.Width == 0 && c.Path == "" && j >= 0 {
+			col.MaxWidth = s.Def.Columns[j].MaxWidth
+		}
+		if c.Width < 0 {
+			col.MaxWidth = 0
+		}
+		out[i] = col
 	}
 	return out
 }
@@ -103,10 +111,8 @@ func (s *ResourceSource) overrideCells(cols []config.ColumnOverride, u *unstruct
 			out[i] = kube.FieldString(u, c.Path)
 			continue
 		}
-		for j, bc := range s.Def.Columns {
-			if strings.EqualFold(bc.Name, c.Name) && j < len(builtin) {
-				out[i] = builtin[j]
-			}
+		if j := builtinIndex(s.Def, c.Name); j >= 0 && j < len(builtin) {
+			out[i] = builtin[j]
 		}
 	}
 	return out
@@ -115,8 +121,11 @@ func (s *ResourceSource) overrideCells(cols []config.ColumnOverride, u *unstruct
 // ---- kubectl 실행 도우미 ----
 
 func kubectlCmd(env *Env, args ...string) (string, []string) {
-	base := env.Cfg.KubectlCommand()
-	all := append(append([]string{}, base[1:]...), "--kubeconfig", env.Cfg.K3s.Kubeconfig)
+	base := env.Cfg.KubectlCommand(env.LocalK3s())
+	all := append(append([]string{}, base[1:]...), "--kubeconfig", env.Cfg.Cluster.Kubeconfig)
+	if c := env.Cfg.Cluster.Context; c != "" {
+		all = append(all, "--context", c)
+	}
 	return base[0], append(all, args...)
 }
 

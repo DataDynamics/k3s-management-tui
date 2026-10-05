@@ -40,10 +40,13 @@ func BuildTabs(env *Env) []TabDef {
 	}
 	network = append(network, newPortForwardSource())
 
-	storage := append(resources(env, "persistentvolumeclaims", "persistentvolumes", "storageclasses"), newLocalPathSource())
+	storage := resources(env, "persistentvolumeclaims", "persistentvolumes", "storageclasses")
+	if env.LocalPath {
+		storage = append(storage, newLocalPathSource())
+	}
 	helm := append([]Source{newHelmReleaseSource()}, resources(env, "helmcharts", "helmchartconfigs")...)
 
-	return []TabDef{
+	tabs := []TabDef{
 		{Key: "dashboard", Name: "Dashboard", Root: NewDashboard(env)},
 		{Key: "workloads", Name: "Workloads", Root: NewTablePage(env, "Workloads",
 			resources(env, "pods", "deployments", "statefulsets", "daemonsets", "replicasets", "jobs", "cronjobs")...)},
@@ -51,23 +54,26 @@ func BuildTabs(env *Env) []TabDef {
 		{Key: "storage", Name: "Storage", Root: NewTablePage(env, "Storage", storage...)},
 		{Key: "config", Name: "Config", Root: NewTablePage(env, "Config",
 			resources(env, "configmaps", "secrets", "serviceaccounts", "roles", "rolebindings", "clusterroles", "clusterrolebindings")...)},
-		{Key: "host", Name: "Host", Root: NewTablePage(env, "Host", HostSources()...)},
-		{Key: "helm", Name: "Helm", Root: NewTablePage(env, "Helm", helm...)},
 	}
+	// Host 탭은 K3S 서버 노드에서 실행할 때만 의미가 있습니다 (설정으로 강제 가능).
+	if env.HostEnabled {
+		tabs = append(tabs, TabDef{Key: "host", Name: "Host", Root: NewTablePage(env, "Host", HostSources()...)})
+	}
+	return append(tabs, TabDef{Key: "helm", Name: "Helm", Root: NewTablePage(env, "Helm", helm...)})
 }
 
 // actionLister는 도움말에 작업 목록을 보여줄 수 있는 페이지입니다.
 type actionLister interface{ AllActions() []*Action }
 
-// NewHelpPage는 전역 키와 현재 화면의 작업 키를 보여줍니다.
-func NewHelpPage(env *Env, current Page) *TextPage {
+// NewHelpPage는 전역 키와 현재 화면의 작업 키를 보여줍니다. tabNames는 표시 순서대로의 탭 이름입니다.
+func NewHelpPage(env *Env, current Page, tabNames []string) *TextPage {
 	kb := env.Cfg.Keys
 	var sb strings.Builder
 	line := func(keys, desc string) { fmt.Fprintf(&sb, "  %-22s %s\n", keys, desc) }
 	join := func(id string) string { return strings.Join(kb.Global[id], ", ") }
 
 	sb.WriteString("전역 키\n")
-	line("1 ~ 7", "탭 전환 (Dashboard, Workloads, Network, Storage, Config, Host, Helm)")
+	line(fmt.Sprintf("1 ~ %d", len(tabNames)), "탭 전환 ("+strings.Join(tabNames, ", ")+")")
 	line(join(config.KeyNextSource)+" / "+join(config.KeyPrevSource), "하위 탭 전환")
 	line(join(config.KeyUp)+" / "+join(config.KeyDown), "이동")
 	line(join(config.KeyPageUp)+" / "+join(config.KeyPageDown), "페이지 이동")
@@ -106,7 +112,9 @@ func NewHelpPage(env *Env, current Page) *TextPage {
 	sb.WriteString("\n명령 모드 (:)\n")
 	line(":<리소스>", "리소스로 이동 (예: :pods, :deploy, :svc, :nodes, :events, :ns)")
 	line(":ns <이름|all>", "네임스페이스 변경")
-	line(":journal", "k3s 서비스 로그")
+	if env.HostEnabled {
+		line(":journal", "k3s 서비스 로그")
+	}
 	line(":<탭이름>", "탭 이동 (:host, :helm ...)")
 	line(":q", "종료")
 
@@ -123,6 +131,16 @@ func NewHelpPage(env *Env, current Page) *TextPage {
 	sb.WriteString("\n안전 장치\n")
 	line("[변경]", "read-only 모드에서 차단되고 감사 로그에 기록됩니다: "+env.Cfg.Audit.File)
 	line("보호 네임스페이스", strings.Join(env.Cfg.Safety.ProtectedNamespaces, ", ")+" — 변경 시 이름 재입력")
+	sb.WriteString("\n클러스터\n")
+	line("배포판", kube.DistroName(env.Distro))
+	if env.Kube != nil {
+		line("API 서버", env.Kube.Server)
+		line("context", env.Kube.Context)
+	}
+	line("kubeconfig", env.Cfg.Cluster.Kubeconfig+"  ("+env.Cfg.Cluster.KubeconfigSource+")")
+	if !env.HostEnabled {
+		line("호스트 관리", "꺼짐 — "+env.HostReason)
+	}
 	sb.WriteString("\n설정 파일: ")
 	if env.Cfg.File != "" {
 		sb.WriteString(env.Cfg.File)

@@ -1,3 +1,8 @@
+# Pods 컬럼 재정의 예제
+# 사용하려면 pods.yaml로 이름을 바꾸고 k3stui를 다시 실행하세요. 설명은 README.md를 참고하세요.
+#
+# 내장 컬럼: NAME, READY, STATUS, RESTARTS, CPU, MEM, IP, NODE, AGE
+# (NAMESPACE는 네임스페이스가 all일 때 자동으로 맨 앞에 붙습니다)
 resource: pods
 columns:
   - name: NAME
@@ -6,9 +11,13 @@ columns:
   - name: RESTARTS
   - name: CPU
   - name: MEM
-  - name: QOS
+  - name: APP                                   # 앱 라벨 (점·슬래시가 든 키는 따옴표로 감쌉니다)
+    path: metadata.labels["app.kubernetes.io/name"]
+    width: 24
+  - name: QOS                                   # Guaranteed / Burstable / BestEffort
     path: status.qosClass
-  - name: SA
+  - name: SA                                    # 서비스 계정
     path: spec.serviceAccountName
   - name: NODE
   - name: AGE
+  # IP 컬럼은 적지 않았으므로 표시하지 않습니다.

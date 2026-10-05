@@ -111,7 +111,7 @@ func (m *Model) pollMetrics() tea.Cmd {
 // pollHost는 호스트 상태를 읽습니다. 버전·인증서는 1분에 한 번만 읽습니다.
 func (m *Model) pollHost(force bool) tea.Cmd {
 	now := time.Now()
-	if m.hostBusy || (!force && now.Sub(m.hostAt) < 5*time.Second) {
+	if !m.env.HostEnabled || m.hostBusy || (!force && now.Sub(m.hostAt) < 5*time.Second) {
 		return nil
 	}
 	m.hostBusy, m.hostAt = true, now
@@ -141,6 +141,9 @@ func (m *Model) pollHost(force bool) tea.Cmd {
 }
 
 func (m *Model) Init() tea.Cmd {
+	if n := len(m.env.Warnings); n > 0 {
+		m.setToast(fmt.Sprintf("설정 경고 %d건: %s (k3stui --check로 전체 확인)", n, m.env.Warnings[0]), true)
+	}
 	return tea.Batch(m.tick(), m.watchStore(), m.pollMetrics(), m.pollHost(true), m.activateTab(m.active))
 }
 
@@ -317,7 +320,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.quit()
 	case kb.Is(config.KeyHelp, k):
-		return views.Push(views.NewHelpPage(m.env, p))
+		return views.Push(views.NewHelpPage(m.env, p, m.tabNames()))
 	case kb.Is(config.KeyCommand, k):
 		m.cmdMode = true
 		m.cmdInput.SetValue("")
@@ -372,7 +375,7 @@ func (m *Model) runCommand(line string) tea.Cmd {
 	case "q", "q!", "quit", "exit":
 		return m.quit()
 	case "help", "h":
-		return views.Push(views.NewHelpPage(m.env, m.page()))
+		return views.Push(views.NewHelpPage(m.env, m.page(), m.tabNames()))
 	case "ns", "namespace":
 		if len(f) == 1 {
 			return m.namespacePicker()
@@ -562,6 +565,14 @@ func (m *Model) actionDone(d views.ActionDoneMsg) tea.Cmd {
 	return tea.Batch(m.updatePage(views.RefreshMsg{}), m.pollHost(true))
 }
 
+func (m *Model) tabNames() []string {
+	names := make([]string, len(m.tabs))
+	for i, t := range m.tabs {
+		names[i] = t.def.Name
+	}
+	return names
+}
+
 func firstLine(s string) string {
 	l, _, _ := strings.Cut(s, "\n")
 	return l
@@ -614,26 +625,34 @@ func (m *Model) headerLine() string {
 	if env.Kube != nil {
 		ver = env.Kube.ServerVersion
 	}
-	svc := env.HostState.Service
-	svcTxt := "k3s ?"
-	switch {
-	case env.HostState.Updated.IsZero():
-	case env.HostState.Err != nil:
-		svcTxt = env.Host.ServiceName() + " ✕"
-	case svc.Active():
-		svcTxt = svc.Unit + " ● " + svc.ActiveState
-	default:
-		svcTxt = svc.Unit + " ○ " + svc.ActiveState
-	}
 	ns := env.Namespace
 	if ns == "" {
 		ns = "all"
 	}
-	parts := []string{" K3S " + ver, m.nodeName, svcTxt, "ns: " + ns}
+	parts := []string{" " + kube.DistroName(env.Distro) + " " + ver}
+	if env.HostEnabled {
+		// 로컬 노드 관리 모드: 호스트 이름과 k3s 서비스 상태를 보여줍니다.
+		svc := env.HostState.Service
+		svcTxt := "k3s ?"
+		switch {
+		case env.HostState.Updated.IsZero():
+		case env.HostState.Err != nil:
+			svcTxt = env.Host.ServiceName() + " ✕"
+		case svc.Active():
+			svcTxt = svc.Unit + " ● " + svc.ActiveState
+		default:
+			svcTxt = svc.Unit + " ○ " + svc.ActiveState
+		}
+		parts = append(parts, m.nodeName, svcTxt)
+	} else if env.Kube != nil {
+		// 원격 클러스터 모드: 어느 클러스터에 붙어 있는지 context로 보여줍니다.
+		parts = append(parts, "ctx: "+env.Kube.Context)
+	}
+	parts = append(parts, "ns: "+ns)
 	if env.ReadOnly {
 		parts = append(parts, "READ-ONLY")
 	}
-	if !env.Host.IsRoot() {
+	if env.HostEnabled && !env.Host.IsRoot() {
 		parts = append(parts, "non-root")
 	}
 	if m.running > 0 {

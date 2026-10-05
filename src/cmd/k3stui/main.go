@@ -40,15 +40,21 @@ func main() {
 func run() error {
 	var (
 		confPath   = flag.String("config", "", "설정 파일 경로 (기본: 탐색 순서에 따름)")
-		kubeconfig = flag.String("kubeconfig", "", "kubeconfig 경로 (conf의 k3s.kubeconfig보다 우선)")
+		kubeconfig = flag.String("kubeconfig", "", "kubeconfig 경로 (기본: $KUBECONFIG → ~/.kube/config → K3S·RKE2·kubeadm 기본 경로)")
+		kubeCtx    = flag.String("context", "", "사용할 kubeconfig context (기본: current-context)")
+		distro     = flag.String("distribution", "", "배포판 지정 (auto, k3s, rke2, kubeadm, eks, gke, kubernetes)")
 		readOnly   = flag.Bool("read-only", false, "모든 변경 작업 비활성화")
 		namespace  = flag.String("n", "", "시작 네임스페이스 (all = 전체)")
 		view       = flag.String("view", "", "시작 탭 (dashboard, workloads, network, storage, config, host, helm)")
 		showVer    = flag.Bool("version", false, "버전 출력")
 		check      = flag.Bool("check", false, "환경 점검 결과를 출력하고 종료")
 		dump       = flag.String("dump", "", "소스 하나(pods, service, backups ...)를 표로 출력하고 종료")
+		columns    = flag.Bool("columns", false, "views.d에 쓸 리소스 이름과 내장 컬럼을 출력하고 종료 (뒤에 리소스 이름을 주면 그것만)")
 	)
 	flag.Parse()
+	if *columns {
+		return views.PrintColumns(os.Stdout, flag.Arg(0))
+	}
 	if *showVer {
 		fmt.Println("k3stui", version)
 		return nil
@@ -58,11 +64,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if *kubeconfig != "" {
-		cfg.K3s.Kubeconfig = *kubeconfig
-	} else if env := os.Getenv("KUBECONFIG"); env != "" && os.Geteuid() != 0 {
-		cfg.K3s.Kubeconfig = env
+	if *kubeCtx != "" {
+		cfg.Cluster.Context = *kubeCtx
 	}
+	if *distro != "" {
+		cfg.Cluster.Distribution = *distro
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+	}
+	resolveKubeconfig(cfg, *kubeconfig)
 	if *readOnly {
 		cfg.Safety.ReadOnly = true
 	}
@@ -78,10 +89,16 @@ func run() error {
 
 	logClose := setupLogging(cfg)
 	defer logClose()
-	slog.Info("start", "version", version, "config", cfg.File, "uid", os.Geteuid())
+	viewWarns := views.PrepareViewOverrides(cfg)
+	for _, w := range viewWarns {
+		slog.Warn(w)
+	}
+	slog.Info("start", "version", version, "config", cfg.File, "uid", os.Geteuid(),
+		"kubeconfig", cfg.Cluster.Kubeconfig, "kubeconfig_source", cfg.Cluster.KubeconfigSource, "context", cfg.Cluster.Context)
 
 	env, cleanup := buildEnv(cfg)
 	defer cleanup()
+	env.Warnings = viewWarns
 
 	switch {
 	case *check:
@@ -95,6 +112,84 @@ func run() error {
 	env.Send = p.Send
 	_, err = p.Run()
 	return err
+}
+
+// resolveKubeconfig는 탐색 순서대로 kubeconfig를 고릅니다.
+// 사용자가 지정한 경로는 그대로 쓰고, 자동 탐색 후보는 실제로 쓸 수 있는지(context와 서버 주소가 있는지) 확인합니다.
+// 쓸 수 있는 후보가 없으면 존재하는 첫 파일을 골라 연결 오류가 화면에 보이게 합니다.
+func resolveKubeconfig(cfg *config.Config, flagPath string) {
+	cands := cfg.KubeconfigCandidates(flagPath)
+	set := func(c config.KubeconfigCandidate) {
+		cfg.Cluster.Kubeconfig, cfg.Cluster.KubeconfigSource = c.Path, c.Source
+	}
+	for _, c := range cands {
+		if c.Explicit {
+			set(c)
+			return
+		}
+		if err := kube.UsableKubeconfig(c.Path, cfg.Cluster.Context); err == nil {
+			set(c)
+			return
+		} else {
+			slog.Debug("kubeconfig 후보 건너뜀", "path", c.Path, "err", err)
+		}
+	}
+	for _, c := range cands {
+		if _, err := os.Stat(c.Path); err == nil {
+			set(c)
+			return
+		}
+	}
+	if len(cands) > 0 {
+		set(cands[0])
+	}
+}
+
+// decideHost는 배포판을 판별하고 호스트 관리(Host 탭)를 켤지 정합니다.
+func decideHost(env *views.Env) {
+	cfg := env.Cfg
+	server, _ := kube.ServerURL(cfg.Cluster.Kubeconfig, cfg.Cluster.Context)
+	if env.Kube != nil {
+		server = env.Kube.Server
+	}
+	env.LocalAPI = kube.IsLocalServer(server)
+	_, binErr := os.Stat(cfg.K3s.Binary)
+
+	env.Distro = cfg.Cluster.Distribution
+	if env.Distro == config.DistroAuto {
+		switch {
+		case env.Kube != nil:
+			env.Distro = env.Kube.DetectDistro(contextBG())
+		case env.LocalAPI && binErr == nil:
+			// API 서버가 응답하지 않아도(k3s 중지 등) 로컬 K3S면 서비스를 다시 띄울 수 있어야 합니다.
+			env.Distro = config.DistroK3s
+		default:
+			env.Distro = config.DistroKubernetes
+		}
+	}
+
+	switch cfg.Cluster.HostManagement {
+	case config.HostEnabled:
+		env.HostEnabled = true
+	case config.HostDisabled:
+		env.HostReason = "설정에서 끔 (cluster.host_management: disabled)"
+	default:
+		switch {
+		case env.Distro != config.DistroK3s:
+			env.HostReason = kube.DistroName(env.Distro) + " 클러스터는 호스트 관리를 아직 지원하지 않습니다 (K3S 전용)"
+		case !env.LocalAPI:
+			env.HostReason = "API 서버가 원격에 있습니다 (" + server + ")"
+		case binErr != nil:
+			env.HostReason = "k3s 바이너리가 없습니다 (" + cfg.K3s.Binary + ")"
+		default:
+			env.HostEnabled = true
+		}
+	}
+	if env.Kube != nil && env.LocalAPI {
+		env.LocalPath = env.Kube.HasProvisioner(contextBG(), "rancher.io/local-path")
+	}
+	slog.Info("cluster", "distro", env.Distro, "server", server, "local", env.LocalAPI,
+		"host", env.HostEnabled, "reason", env.HostReason, "localpath", env.LocalPath)
 }
 
 // stateDir는 root가 아닐 때 로그를 둘 위치입니다.
@@ -150,12 +245,13 @@ func setupLogging(cfg *config.Config) func() {
 func buildEnv(cfg *config.Config) (*views.Env, func()) {
 	runner := executil.System{Timeout: cfg.Tools.Timeout}
 	env := &views.Env{
-		Cfg:      cfg,
-		Styles:   styles.New(cfg.Theme),
-		Metrics:  kube.NewMetrics(),
-		Host:     k3s.NewSystem(cfg, runner),
-		Crictl:   &runtime.Crictl{Binary: cfg.K3s.Binary, Run: runner},
-		Helm:     &helm.Client{Binary: cfg.Tools.Helm, Run: executil.System{Timeout: cfg.Tools.Timeout, Env: []string{"KUBECONFIG=" + cfg.K3s.Kubeconfig}}},
+		Cfg:     cfg,
+		Styles:  styles.New(cfg.Theme),
+		Metrics: kube.NewMetrics(),
+		Host:    k3s.NewSystem(cfg, runner),
+		Crictl:  &runtime.Crictl{Binary: cfg.K3s.Binary, Run: runner},
+		Helm: &helm.Client{Binary: cfg.Tools.Helm, Context: cfg.Cluster.Context,
+			Run: executil.System{Timeout: cfg.Tools.Timeout, Env: []string{"KUBECONFIG=" + cfg.Cluster.Kubeconfig}}},
 		ReadOnly: cfg.Safety.ReadOnly,
 	}
 	if ns := cfg.UI.DefaultNamespace; ns != "all" {
@@ -174,7 +270,7 @@ func buildEnv(cfg *config.Config) (*views.Env, func()) {
 	}
 	env.Audit = al
 
-	client, err := kube.New(cfg.K3s.Kubeconfig)
+	client, err := kube.New(cfg.Cluster.Kubeconfig, cfg.Cluster.Context)
 	if err != nil {
 		if errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "permission denied") {
 			err = fmt.Errorf("%w — root로 실행하거나 --kubeconfig로 읽을 수 있는 파일을 지정하세요", err)
@@ -190,6 +286,7 @@ func buildEnv(cfg *config.Config) (*views.Env, func()) {
 			}
 		})
 	}
+	decideHost(env)
 	return env, func() {
 		if env.PF != nil {
 			env.PF.StopAll()
@@ -211,26 +308,17 @@ func runCheck(env *views.Env) error {
 	h := env.Host
 	fmt.Printf("k3stui %s\n", version)
 	fmt.Printf("[%s] 설정 파일       %s\n", ok(true), orDefault(cfg.File, "(내장 기본값)"))
-	fmt.Printf("[%s] root 권한       uid=%d\n", ok(h.IsRoot()), os.Geteuid())
+	fmt.Printf("[%s] kubeconfig      %s (%s)\n", ok(env.Kube != nil), cfg.Cluster.Kubeconfig, cfg.Cluster.KubeconfigSource)
 	if env.Kube != nil {
-		fmt.Printf("[%s] API 서버        %s (%s)\n", ok(true), env.Kube.ServerVersion, cfg.K3s.Kubeconfig)
+		fmt.Printf("[%s] API 서버        %s  %s (context: %s)\n", ok(true), env.Kube.ServerVersion, env.Kube.Server, env.Kube.Context)
 	} else {
 		fmt.Printf("[%s] API 서버        %v\n", ok(false), env.KubeErr)
 	}
-	st, err := h.ServiceStatus(contextBG())
-	if err != nil {
-		fmt.Printf("[%s] k3s 서비스      %v\n", ok(false), err)
-	} else {
-		fmt.Printf("[%s] k3s 서비스      %s.service %s/%s\n", ok(st.Active()), st.Unit, st.ActiveState, st.SubState)
+	local := "원격"
+	if env.LocalAPI {
+		local = "로컬"
 	}
-	if v, err := h.Version(contextBG()); err == nil {
-		fmt.Printf("[%s] k3s 바이너리    %s\n", ok(true), v)
-	} else {
-		fmt.Printf("[%s] k3s 바이너리    %v\n", ok(false), err)
-	}
-	fmt.Printf("[%s] data-dir        %s\n", ok(dirExists(h.DataDir())), h.DataDir())
-	ds := h.Datastore()
-	fmt.Printf("[%s] 데이터스토어    %s %s\n", ok(ds.Kind != k3s.DatastoreUnknown), ds.Kind, ds.Path+ds.Endpoint)
+	fmt.Printf("[%s] 배포판          %s (API 서버: %s)\n", ok(true), kube.DistroName(env.Distro), local)
 	if env.Kube != nil {
 		err := env.Metrics.Poll(contextBG(), env.Kube)
 		fmt.Printf("[%s] metrics-server  %v\n", ok(err == nil), orDefault(errString(err), "응답함"))
@@ -240,10 +328,38 @@ func runCheck(env *views.Env) error {
 	} else {
 		fmt.Printf("[%s] helm            %v\n", ok(false), err)
 	}
+	kc := cfg.KubectlCommand(env.LocalK3s())
+	fmt.Printf("[%s] kubectl         %s\n", ok(true), strings.Join(kc, " "))
 	fmt.Printf("[%s] 편집기          %s\n", ok(true), strings.Join(cfg.EditorCommand(), " "))
+
+	if !env.HostEnabled {
+		fmt.Printf("[SKIP] 호스트 관리   %s\n", env.HostReason)
+	} else {
+		fmt.Printf("[%s] root 권한       uid=%d\n", ok(h.IsRoot()), os.Geteuid())
+		st, err := h.ServiceStatus(contextBG())
+		if err != nil {
+			fmt.Printf("[%s] k3s 서비스      %v\n", ok(false), err)
+		} else {
+			fmt.Printf("[%s] k3s 서비스      %s.service %s/%s\n", ok(st.Active()), st.Unit, st.ActiveState, st.SubState)
+		}
+		if v, err := h.Version(contextBG()); err == nil {
+			fmt.Printf("[%s] k3s 바이너리    %s\n", ok(true), v)
+		} else {
+			fmt.Printf("[%s] k3s 바이너리    %v\n", ok(false), err)
+		}
+		fmt.Printf("[%s] data-dir        %s\n", ok(dirExists(h.DataDir())), h.DataDir())
+		ds := h.Datastore()
+		fmt.Printf("[%s] 데이터스토어    %s %s\n", ok(ds.Kind != k3s.DatastoreUnknown), ds.Kind, ds.Path+ds.Endpoint)
+		fmt.Printf("     백업 위치       %s (보관 %d개)\n", cfg.Backup.Dir, cfg.Backup.Keep)
+	}
 	fmt.Printf("     로그            %s\n", orDefault(cfg.Logging.File, "(비활성)"))
 	fmt.Printf("     감사 로그       %s\n", cfg.Audit.File)
-	fmt.Printf("     백업 위치       %s (보관 %d개)\n", cfg.Backup.Dir, cfg.Backup.Keep)
+	if len(env.Warnings) == 0 {
+		fmt.Printf("[%s] views.d         재정의 %d개\n", ok(true), len(cfg.Views))
+	}
+	for _, w := range env.Warnings {
+		fmt.Printf("[WARN] %s\n", w)
+	}
 	return nil
 }
 

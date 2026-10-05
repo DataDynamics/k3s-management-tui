@@ -46,7 +46,7 @@ func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool)
 
 func TestE2EWorkloadLifecycle(t *testing.T) {
 	ctx := context.Background()
-	c, err := New(envOr("K3STUI_E2E_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"))
+	c, err := New(envOr("K3STUI_E2E_KUBECONFIG", "/etc/rancher/k3s/k3s.yaml"), "")
 	if err != nil {
 		t.Skipf("클러스터에 연결할 수 없음: %v", err)
 	}

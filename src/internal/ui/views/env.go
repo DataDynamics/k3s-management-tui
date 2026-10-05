@@ -31,6 +31,19 @@ type Env struct {
 	PF      *kube.PortForwarder
 	Audit   *audit.Logger
 
+	// Distro는 판별한 배포판입니다 (config.DistroK3s 등).
+	Distro string
+	// LocalAPI는 API 서버가 이 호스트에 있는지 여부입니다.
+	LocalAPI bool
+	// HostEnabled가 false면 Host 탭과 대시보드 호스트 패널을 숨깁니다. HostReason은 그 이유입니다.
+	HostEnabled bool
+	HostReason  string
+	// LocalPath는 local-path 사용량 화면을 보여줄지 여부입니다 (local-path StorageClass가 있고 로컬 API 서버일 때).
+	LocalPath bool
+
+	// Warnings는 시작할 때 발견한 설정 경고입니다 (views.d 등). 첫 화면에 알리고 --check에 표시합니다.
+	Warnings []string
+
 	Namespace string // "" = 전체
 	ReadOnly  bool
 	HostState HostStatus
@@ -52,6 +65,9 @@ type HostStatus struct {
 	Certs     []k3s.CertInfo
 	Updated   time.Time
 }
+
+// LocalK3s는 TUI가 K3S 서버 노드에서 실행 중인지 알려줍니다.
+func (e *Env) LocalK3s() bool { return e.Distro == "k3s" && e.LocalAPI }
 
 // LevelStyle은 행 상태 색상입니다.
 func (e *Env) LevelStyle(l kube.Level) *lipgloss.Style {

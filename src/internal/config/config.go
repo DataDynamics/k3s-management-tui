@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 // Config는 conf/k3stui.yaml의 내용입니다.
 type Config struct {
+	Cluster     ClusterConfig     `yaml:"cluster"`
 	K3s         K3sConfig         `yaml:"k3s"`
 	UI          UIConfig          `yaml:"ui"`
 	Safety      SafetyConfig      `yaml:"safety"`
@@ -31,8 +33,38 @@ type Config struct {
 	Views   ViewOverrides `yaml:"-"`
 }
 
+// 배포판 값입니다. auto는 API 서버 버전과 클러스터 정보로 판별합니다.
+const (
+	DistroAuto       = "auto"
+	DistroK3s        = "k3s"
+	DistroRKE2       = "rke2"
+	DistroKubeadm    = "kubeadm"
+	DistroEKS        = "eks"
+	DistroGKE        = "gke"
+	DistroKubernetes = "kubernetes"
+)
+
+// 호스트 관리(Host 탭) 사용 여부입니다.
+const (
+	HostAuto     = "auto"     // 로컬 K3S일 때만 켭니다
+	HostEnabled  = "enabled"  // 항상 켭니다
+	HostDisabled = "disabled" // 항상 끕니다
+)
+
+// ClusterConfig는 접속할 클러스터와 배포판 설정입니다.
+type ClusterConfig struct {
+	Distribution   string `yaml:"distribution"`    // auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
+	Kubeconfig     string `yaml:"kubeconfig"`      // 비우면 자동 탐색 (KubeconfigCandidates 참고)
+	Context        string `yaml:"context"`         // 비우면 kubeconfig의 current-context
+	HostManagement string `yaml:"host_management"` // auto | enabled | disabled
+
+	// KubeconfigSource는 kubeconfig를 어디서 골랐는지 기록합니다 (화면·--check 표시용).
+	KubeconfigSource string `yaml:"-"`
+}
+
 type K3sConfig struct {
-	ConfigFile  string `yaml:"config_file"`
+	ConfigFile string `yaml:"config_file"`
+	// Kubeconfig는 이전 버전 호환용입니다. cluster.kubeconfig가 비어 있으면 이 값을 씁니다.
 	Kubeconfig  string `yaml:"kubeconfig"`
 	ServiceName string `yaml:"service_name"`
 	Binary      string `yaml:"binary"`
@@ -84,9 +116,9 @@ type AuditConfig struct {
 // Default는 conf 파일이 없을 때 쓰는 내장 기본값입니다.
 func Default() *Config {
 	return &Config{
+		Cluster: ClusterConfig{Distribution: DistroAuto, HostManagement: HostAuto},
 		K3s: K3sConfig{
 			ConfigFile:  "/etc/rancher/k3s/config.yaml",
-			Kubeconfig:  "/etc/rancher/k3s/k3s.yaml",
 			ServiceName: "k3s",
 			Binary:      "/usr/local/bin/k3s",
 			DataDir:     "auto",
@@ -117,6 +149,7 @@ func Default() *Config {
 }
 
 // Candidates는 설정 파일 탐색 순서를 돌려줍니다 (설계 3.2절).
+// --config → $K3STUI_CONF → ~/.config/k3stui/k3stui.yaml → $K3STUI_HOME/conf → <실행 파일>/../conf → /etc/k3stui
 func Candidates(flagPath string) []string {
 	var out []string
 	if flagPath != "" {
@@ -124,6 +157,10 @@ func Candidates(flagPath string) []string {
 	}
 	if env := os.Getenv("K3STUI_CONF"); env != "" {
 		out = append(out, env)
+	}
+	// 사용자별 설정: 설치본(conf/)을 고치지 않고 클러스터별 설정을 둘 때 씁니다.
+	if dir, err := os.UserConfigDir(); err == nil {
+		out = append(out, filepath.Join(dir, "k3stui", "k3stui.yaml"))
 	}
 	if home := os.Getenv("K3STUI_HOME"); home != "" {
 		out = append(out, filepath.Join(home, "conf", "k3stui.yaml"))
@@ -212,6 +249,27 @@ func (c *Config) Validate() error {
 	if c.UI.DefaultNamespace == "" {
 		c.UI.DefaultNamespace = "all"
 	}
+	if c.Cluster.Distribution == "" {
+		c.Cluster.Distribution = DistroAuto
+	}
+	c.Cluster.Distribution = strings.ToLower(c.Cluster.Distribution)
+	switch c.Cluster.Distribution {
+	case DistroAuto, DistroK3s, DistroRKE2, DistroKubeadm, DistroEKS, DistroGKE, DistroKubernetes:
+	default:
+		return fmt.Errorf("cluster.distribution 값이 올바르지 않습니다: %q (auto, k3s, rke2, kubeadm, eks, gke, kubernetes)", c.Cluster.Distribution)
+	}
+	if c.Cluster.HostManagement == "" {
+		c.Cluster.HostManagement = HostAuto
+	}
+	c.Cluster.HostManagement = strings.ToLower(c.Cluster.HostManagement)
+	switch c.Cluster.HostManagement {
+	case HostAuto, HostEnabled, HostDisabled:
+	default:
+		return fmt.Errorf("cluster.host_management는 auto, enabled, disabled 중 하나여야 합니다: %q", c.Cluster.HostManagement)
+	}
+	if c.Cluster.Kubeconfig == "" && c.K3s.Kubeconfig != "" {
+		c.Cluster.Kubeconfig = c.K3s.Kubeconfig
+	}
 	switch strings.ToLower(c.UI.Theme) {
 	case "dark", "light":
 	default:
@@ -246,9 +304,51 @@ func (c *Config) EditorCommand() []string {
 }
 
 // KubectlCommand는 kubectl 실행 명령(앞부분)을 돌려줍니다.
-func (c *Config) KubectlCommand() []string {
+// tools.kubectl이 있으면 그 값을 쓰고, 로컬 K3S면 "k3s kubectl"을,
+// 그 밖에는 PATH의 kubectl을 씁니다. PATH에 없으면 k3s 바이너리로 대신합니다.
+func (c *Config) KubectlCommand(localK3s bool) []string {
 	if f := strings.Fields(c.Tools.Kubectl); len(f) > 0 {
 		return f
 	}
-	return []string{c.K3s.Binary, "kubectl"}
+	if localK3s {
+		return []string{c.K3s.Binary, "kubectl"}
+	}
+	if p, err := exec.LookPath("kubectl"); err == nil {
+		return []string{p}
+	}
+	if _, err := os.Stat(c.K3s.Binary); err == nil {
+		return []string{c.K3s.Binary, "kubectl"}
+	}
+	return []string{"kubectl"}
+}
+
+// KubeconfigCandidate는 kubeconfig 후보 하나입니다.
+type KubeconfigCandidate struct {
+	Path     string // ':'로 여러 파일을 이을 수 있습니다 (KUBECONFIG 형식)
+	Source   string // 화면 표시용 출처
+	Explicit bool   // 사용자가 직접 지정했으면 검증 없이 씁니다
+}
+
+// KubeconfigCandidates는 kubeconfig 탐색 순서를 돌려줍니다.
+// --kubeconfig → cluster.kubeconfig → $KUBECONFIG → ~/.kube/config → K3S → RKE2 → kubeadm
+func (c *Config) KubeconfigCandidates(flagPath string) []KubeconfigCandidate {
+	var out []KubeconfigCandidate
+	if flagPath != "" {
+		out = append(out, KubeconfigCandidate{Path: flagPath, Source: "--kubeconfig", Explicit: true})
+	}
+	if c.Cluster.Kubeconfig != "" {
+		out = append(out, KubeconfigCandidate{Path: c.Cluster.Kubeconfig, Source: "cluster.kubeconfig", Explicit: true})
+	}
+	if env := os.Getenv("KUBECONFIG"); env != "" {
+		out = append(out, KubeconfigCandidate{Path: env, Source: "$KUBECONFIG"})
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		out = append(out, KubeconfigCandidate{Path: filepath.Join(home, ".kube", "config"), Source: "~/.kube/config"})
+	}
+	out = append(out,
+		KubeconfigCandidate{Path: "/etc/rancher/k3s/k3s.yaml", Source: "K3S 기본 경로"},
+		KubeconfigCandidate{Path: "/etc/rancher/rke2/rke2.yaml", Source: "RKE2 기본 경로"},
+		KubeconfigCandidate{Path: "/etc/kubernetes/admin.conf", Source: "kubeadm 기본 경로"},
+	)
+	return out
 }

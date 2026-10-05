@@ -29,20 +29,25 @@ for a in "$@"; do
   esac
 done
 
+# root가 아니면 읽을 수 있는 kubeconfig가 있어야 합니다.
 # K3S kubeconfig(/etc/rancher/k3s/k3s.yaml)는 기본 0600이라 root만 읽을 수 있습니다.
+# 일반 Kubernetes는 보통 $KUBECONFIG 또는 ~/.kube/config를 쓰므로 그대로 실행합니다.
 if [[ $EUID -ne 0 ]]; then
   has_kc=0
   for a in "$@"; do [[ "$a" == --kubeconfig* || "$a" == -kubeconfig* ]] && has_kc=1; done
-  if [[ $has_kc -eq 0 && ( -z "${KUBECONFIG:-}" || ! -r "${KUBECONFIG:-}" ) ]]; then
+  [[ -n "${KUBECONFIG:-}" ]] && has_kc=1
+  [[ -r "$HOME/.kube/config" ]] && has_kc=1
+  if [[ $has_kc -eq 0 ]]; then
     cat >&2 <<MSG
-k3stui: root 권한이 필요합니다.
+k3stui: 읽을 수 있는 kubeconfig가 없습니다.
+
+K3S 서버 노드라면 root로 실행하세요 (호스트 관리 기능 포함):
 
   sudo $0 $*
 
-일반 사용자로 Kubernetes 리소스만 보려면 읽을 수 있는 kubeconfig를 지정하세요
-(호스트 관리 기능은 비활성화됩니다):
+다른 Kubernetes 클러스터라면 kubeconfig를 지정하세요:
 
-  $0 --kubeconfig ~/.kube/config
+  $0 --kubeconfig ~/.kube/config [--context <이름>]
 MSG
     exit 1
   fi

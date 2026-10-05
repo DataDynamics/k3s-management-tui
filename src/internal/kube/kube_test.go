@@ -215,3 +215,37 @@ func TestStoreNilSafe(t *testing.T) {
 		t.Error("nil Metrics")
 	}
 }
+
+func TestFieldPath(t *testing.T) {
+	pod := toU(t, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Labels: map[string]string{"app.kubernetes.io/name": "web", "tier": "front"}},
+		Spec: corev1.PodSpec{NodeName: "n1", Containers: []corev1.Container{
+			{Name: "app", Image: "nginx:1"}, {Name: "sidecar", Image: "envoy:2"}}},
+		Status: corev1.PodStatus{QOSClass: corev1.PodQOSBurstable},
+	})
+	cases := map[string]string{
+		"spec.nodeName":    "n1",
+		".spec.nodeName":   "n1",
+		"{.spec.nodeName}": "n1",
+		`metadata.labels["app.kubernetes.io/name"]`: "web",
+		`metadata.labels['app.kubernetes.io/name']`: "web",
+		`metadata.labels[ "tier" ]`:                 "front",
+		"metadata.labels":                           "app.kubernetes.io/name=web,tier=front",
+		"spec.containers[0].image":                  "nginx:1",
+		"spec.containers[1].name":                   "sidecar",
+		"spec.containers[*].image":                  "nginx:1,envoy:2",
+		"spec.containers[5].image":                  "",
+		"status.qosClass":                           "Burstable",
+		"spec.missing.field":                        "",
+	}
+	for path, want := range cases {
+		if got := FieldString(pod, path); got != want {
+			t.Errorf("FieldString(%q) = %q, want %q", path, got, want)
+		}
+	}
+	for _, bad := range []string{"", "a..b", `a["x]`, "a[x]", "a[-1]", "a[0", `a["x"`, "a."} {
+		if _, err := ParseFieldPath(bad); err == nil {
+			t.Errorf("잘못된 path %q를 허용함", bad)
+		}
+	}
+}

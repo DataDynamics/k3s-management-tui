@@ -24,9 +24,11 @@ type ColumnOverride struct {
 type ViewOverride struct {
 	Resource string           `yaml:"resource"`
 	Columns  []ColumnOverride `yaml:"columns"`
+	File     string           `yaml:"-"` // 읽은 파일 이름 (경고 표시용)
 }
 
 // ViewOverrides는 리소스 키(pods, deployments ...) → 재정의입니다.
+// 파일에서 읽은 직후에는 파일 이름이 키이며, views.PrepareViewOverrides가 리소스 키로 정리합니다.
 type ViewOverrides map[string]ViewOverride
 
 // LoadViewOverrides는 디렉터리의 *.yaml을 모두 읽습니다. resource가 비면 파일 이름을 씁니다.
@@ -56,18 +58,18 @@ func LoadViewOverrides(dir string) (ViewOverrides, error) {
 		if err := yaml.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("views.d/%s 파싱 실패: %w", name, err)
 		}
+		stem := strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
 		if v.Resource == "" {
-			v.Resource = strings.TrimSuffix(strings.TrimSuffix(name, ".yaml"), ".yml")
+			v.Resource = stem
 		}
-		if len(v.Columns) == 0 {
-			continue
-		}
+		v.Resource = strings.ToLower(v.Resource)
+		v.File = name
 		for i, c := range v.Columns {
 			if c.Name == "" {
 				return nil, fmt.Errorf("views.d/%s: %d번째 컬럼에 name이 없습니다", name, i+1)
 			}
 		}
-		out[strings.ToLower(v.Resource)] = v
+		out[name] = v
 	}
 	return out, nil
 }

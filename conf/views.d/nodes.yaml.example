@@ -1,0 +1,24 @@
+# Nodes 컬럼 재정의 예제 (클라우드·다중 노드 클러스터용)
+# 사용하려면 nodes.yaml로 이름을 바꾸세요. 노드 목록은 :nodes 명령으로 엽니다.
+#
+# 내장 컬럼: NAME, STATUS, ROLES, CPU, MEM, VERSION, INTERNAL-IP, AGE
+resource: nodes
+columns:
+  - name: NAME
+  - name: STATUS
+  - name: ROLES
+  - name: CPU
+  - name: MEM
+  - name: ZONE                                  # 가용 영역
+    path: metadata.labels["topology.kubernetes.io/zone"]
+  - name: INSTANCE                              # 인스턴스 타입 (EKS·GKE·AKS)
+    path: metadata.labels["node.kubernetes.io/instance-type"]
+  - name: OS-IMAGE
+    path: status.nodeInfo.osImage
+    width: 30
+  - name: RUNTIME                               # 컨테이너 런타임 버전
+    path: status.nodeInfo.containerRuntimeVersion
+  - name: TAINTS                                # taint 키 목록
+    path: spec.taints[*].key
+    width: 40
+  - name: AGE

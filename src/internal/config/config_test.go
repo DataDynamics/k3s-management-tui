@@ -61,7 +61,7 @@ backup:
 	if cfg.Theme.Primary != "#123456" || cfg.Theme.OK == "" {
 		t.Errorf("테마 병합 실패: %+v", cfg.Theme)
 	}
-	v, ok := cfg.Views["pods"]
+	v, ok := cfg.Views["pods.yaml"]
 	if !ok || len(v.Columns) != 2 || v.Columns[1].Path != "status.qosClass" {
 		t.Errorf("views.d 로딩 실패: %+v", cfg.Views)
 	}
@@ -74,8 +74,8 @@ func TestLoadWithoutFileUsesDefaults(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.K3s.Kubeconfig != "/etc/rancher/k3s/k3s.yaml" {
-		t.Errorf("unexpected kubeconfig %q", cfg.K3s.Kubeconfig)
+	if cfg.Cluster.Kubeconfig != "" || cfg.Cluster.Distribution != DistroAuto || cfg.Cluster.HostManagement != HostAuto {
+		t.Errorf("cluster 기본값: %+v", cfg.Cluster)
 	}
 }
 
@@ -118,10 +118,66 @@ func TestEditorAndKubectl(t *testing.T) {
 	if got := cfg.EditorCommand(); got[0] != "vim" {
 		t.Errorf("conf editor 우선순위 실패: %v", got)
 	}
-	if got := cfg.KubectlCommand(); got[0] != "/usr/local/bin/k3s" || got[1] != "kubectl" {
-		t.Errorf("기본 kubectl 명령: %v", got)
+	if got := cfg.KubectlCommand(true); got[0] != "/usr/local/bin/k3s" || got[1] != "kubectl" {
+		t.Errorf("로컬 K3S kubectl 명령: %v", got)
+	}
+	// 로컬 K3S가 아니면 PATH의 kubectl을 씁니다.
+	bin := t.TempDir()
+	write(t, filepath.Join(bin, "kubectl"), "#!/bin/sh\n")
+	os.Chmod(filepath.Join(bin, "kubectl"), 0o755)
+	t.Setenv("PATH", bin)
+	if got := cfg.KubectlCommand(false); len(got) != 1 || got[0] != filepath.Join(bin, "kubectl") {
+		t.Errorf("PATH kubectl 명령: %v", got)
+	}
+	cfg.Tools.Kubectl = "/opt/kubectl --v=0"
+	if got := cfg.KubectlCommand(true); got[0] != "/opt/kubectl" || len(got) != 2 {
+		t.Errorf("tools.kubectl 우선순위: %v", got)
 	}
 	if !cfg.IsProtected("kube-system") || cfg.IsProtected("default") {
 		t.Error("보호 네임스페이스 판정 오류")
+	}
+}
+
+func TestKubeconfigCandidatesOrder(t *testing.T) {
+	cfg := Default()
+	t.Setenv("KUBECONFIG", "/a:/b")
+	t.Setenv("HOME", "/home/u")
+	got := cfg.KubeconfigCandidates("")
+	want := []string{"/a:/b", "/home/u/.kube/config", "/etc/rancher/k3s/k3s.yaml", "/etc/rancher/rke2/rke2.yaml", "/etc/kubernetes/admin.conf"}
+	if len(got) != len(want) {
+		t.Fatalf("후보 %d개: %+v", len(got), got)
+	}
+	for i, w := range want {
+		if got[i].Path != w || got[i].Explicit {
+			t.Errorf("%d번째 후보 = %+v, want %s", i, got[i], w)
+		}
+	}
+	cfg.Cluster.Kubeconfig = "/conf.yaml"
+	got = cfg.KubeconfigCandidates("/flag.yaml")
+	if got[0].Path != "/flag.yaml" || !got[0].Explicit || got[1].Path != "/conf.yaml" || !got[1].Explicit {
+		t.Errorf("지정 경로가 먼저여야 함: %+v", got[:2])
+	}
+}
+
+func TestClusterValidate(t *testing.T) {
+	cfg := Default()
+	cfg.Cluster.Distribution = "OpenShift"
+	if err := cfg.Validate(); err == nil {
+		t.Error("모르는 배포판을 허용함")
+	}
+	cfg = Default()
+	cfg.Cluster.HostManagement = "maybe"
+	if err := cfg.Validate(); err == nil {
+		t.Error("잘못된 host_management를 허용함")
+	}
+	// 이전 설정(k3s.kubeconfig)도 계속 동작해야 합니다.
+	cfg = Default()
+	cfg.K3s.Kubeconfig = "/old.yaml"
+	cfg.Cluster.Distribution = "K3S"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Cluster.Kubeconfig != "/old.yaml" || cfg.Cluster.Distribution != DistroK3s {
+		t.Errorf("호환·정규화 실패: %+v", cfg.Cluster)
 	}
 }

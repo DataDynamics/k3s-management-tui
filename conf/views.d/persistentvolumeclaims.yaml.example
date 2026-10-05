@@ -1,0 +1,16 @@
+# PVC 컬럼 재정의 예제
+# 사용하려면 persistentvolumeclaims.yaml (또는 pvc.yaml)로 이름을 바꾸세요.
+#
+# 내장 컬럼: NAME, STATUS, VOLUME, CAPACITY, ACCESS, STORAGECLASS, AGE
+resource: persistentvolumeclaims
+columns:
+  - name: NAME
+  - name: STATUS
+  - name: REQUEST                               # 요청한 용량 (CAPACITY는 실제 할당 용량)
+    path: spec.resources.requests.storage
+  - name: CAPACITY
+  - name: ACCESS
+  - name: STORAGECLASS
+  - name: VOLUME
+    width: 44
+  - name: AGE

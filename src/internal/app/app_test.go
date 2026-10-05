@@ -76,6 +76,13 @@ func (f *fakeHost) ReadFile(string) (string, error)                           { 
 
 func newTestModel(t *testing.T, root bool) (*Model, *fakeHost, *bytes.Buffer) {
 	t.Helper()
+	return newTestModelWith(t, root, func(env *views.Env) {
+		env.Distro, env.LocalAPI, env.HostEnabled = "k3s", true, true
+	})
+}
+
+func newTestModelWith(t *testing.T, root bool, setup func(*views.Env)) (*Model, *fakeHost, *bytes.Buffer) {
+	t.Helper()
 	cfg := config.Default()
 	cfg.Keys = config.DefaultKeybindings()
 	cfg.Theme, _ = config.LoadTheme("", "dark")
@@ -88,6 +95,7 @@ func newTestModel(t *testing.T, root bool) (*Model, *fakeHost, *bytes.Buffer) {
 		Helm:   &helm.Client{Binary: "helm", Run: failRunner{}},
 		Crictl: &runtime.Crictl{Binary: "k3s", Run: failRunner{}},
 	}
+	setup(env)
 	m := New(env)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	return m, host, &auditBuf
@@ -384,5 +392,54 @@ func TestCommandModeAndQuit(t *testing.T) {
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
 		t.Error("QuitMsg가 아님")
+	}
+}
+
+func TestRemoteClusterHidesHostFeatures(t *testing.T) {
+	m, host, _ := newTestModelWith(t, true, func(env *views.Env) {
+		env.Distro, env.LocalAPI, env.HostEnabled = "eks", false, false
+		env.HostReason = "API 서버가 원격에 있습니다 (https://example.eks.amazonaws.com)"
+		env.Cfg.Cluster.Kubeconfig, env.Cfg.Cluster.KubeconfigSource = "/home/u/.kube/config", "~/.kube/config"
+	})
+	var names []string
+	for _, tab := range m.tabs {
+		names = append(names, tab.def.Key)
+		if tab.def.Key == "host" {
+			t.Error("원격 클러스터에서는 Host 탭이 없어야 함")
+		}
+	}
+	if strings.Join(names, ",") != "dashboard,workloads,network,storage,config,helm" {
+		t.Errorf("탭 순서: %v", names)
+	}
+	out := m.render()
+	for _, want := range []string{"EKS", "연결 정보", "API 서버가 원격에 있습니다", "6 Helm"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("화면에 %q가 없음:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "k3s.service") {
+		t.Error("원격 모드 헤더에 k3s 서비스 상태가 나오면 안 됨")
+	}
+	// 호스트 상태를 읽지 않아야 합니다.
+	if cmd := m.pollHost(true); cmd != nil {
+		t.Error("호스트 관리가 꺼져 있으면 호스트 상태를 조회하면 안 됨")
+	}
+	_ = host
+	// :host, :journal은 없는 기능으로 안내합니다.
+	_, cmd := m.Update(key(":"))
+	run(t, m, cmd, 0)
+	typeText(t, m, "journal")
+	_, cmd = m.Update(key("enter"))
+	run(t, m, cmd, 0)
+	if !m.toastErr {
+		t.Error(":journal은 원격 모드에서 오류 알림이어야 함")
+	}
+	// 도움말의 탭 번호도 6개 기준이어야 합니다.
+	help := views.NewHelpPage(m.env, m.page(), m.tabNames())
+	run(t, m, help.Init(), 0)
+	m.Update(views.PushPageMsg{Page: help})
+	run(t, m, help.Init(), 0)
+	if !strings.Contains(m.render(), "1 ~ 6") {
+		t.Errorf("도움말 탭 번호:\n%s", m.render())
 	}
 }

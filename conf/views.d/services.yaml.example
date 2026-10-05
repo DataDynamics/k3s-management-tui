@@ -1,0 +1,17 @@
+# Services 컬럼 재정의 예제
+# 사용하려면 services.yaml로 이름을 바꾸세요.
+#
+# 내장 컬럼: NAME, TYPE, CLUSTER-IP, EXTERNAL-IP, PORTS, AGE
+resource: services
+columns:
+  - name: NAME
+  - name: TYPE
+  - name: CLUSTER-IP
+  - name: EXTERNAL-IP
+  - name: PORTS
+  - name: SELECTOR                              # 이 서비스가 고르는 Pod 라벨
+    path: spec.selector
+    width: 40
+  - name: TRAFFIC                               # Cluster / Local (LoadBalancer·NodePort만)
+    path: spec.externalTrafficPolicy
+  - name: AGE

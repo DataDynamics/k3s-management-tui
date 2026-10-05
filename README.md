@@ -5,8 +5,15 @@ K3S 서버를 터미널 하나에서 관리하는 TUI입니다.
 k9s처럼 Kubernetes 리소스를 다루는 기능에 더해, 일반 도구가 다루지 않는 **K3S 호스트 쪽 관리 기능**을 함께 제공합니다.
 systemd 서비스 제어, `config.yaml` 편집, 데이터스토어 백업·복원, 자동 배포 manifest, 인증서, containerd 이미지·컨테이너를 한 화면에서 관리할 수 있습니다.
 
+K3S가 아닌 Kubernetes(kubeadm, RKE2, EKS, GKE 등)에도 붙일 수 있습니다. 이때는 호스트 관리 기능을 빼고 리소스 관리 기능만 제공합니다.
+자세한 내용은 [다른 Kubernetes 클러스터에서 사용](#다른-kubernetes-클러스터에서-사용)을 참고하세요.
+
 - 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
 - 컬럼 재정의: [conf/views.d/README.md](conf/views.d/README.md)
+- k8s용 설정 예제: [conf/examples/k3stui-k8s.yaml](conf/examples/k3stui-k8s.yaml)
+- 화면별 스크린샷: [스크린샷](#스크린샷)
+
+![대시보드](docs/images/dashboard.png)
 
 ## 주요 기능
 
@@ -20,10 +27,111 @@ systemd 서비스 제어, `config.yaml` 편집, 데이터스토어 백업·복�
 | 데이터스토어 | SQLite 온라인 백업, 보관 개수 관리, 복원(무결성·토큰 검사 포함), etcd 스냅샷 생성 |
 | 기타 | 자동 배포 manifest `.skip` 전환, 인증서 만료 확인·갱신, containerd 컨테이너·이미지 조회와 미사용 이미지 정리, Helm 릴리스(values·이력·롤백·삭제), Cilium 에이전트 상태 |
 
+## 스크린샷
+
+실제 K3S 서버(v1.36.5+k3s1, 단일 노드, Cilium, SQLite 데이터스토어)에서 실행한 화면입니다.
+150×42 터미널에서 촬영했습니다.
+
+### Dashboard
+
+클러스터 요약, K3S 호스트 상태, 노드 사용량, 문제 Pod, 최근 Warning 이벤트를 한 화면에 보여줍니다.
+
+![Dashboard](docs/images/dashboard.png)
+
+### Workloads
+
+Pod 목록에는 상태, 재시작 횟수, metrics-server 기준 CPU·메모리 사용량이 함께 표시됩니다.
+
+![Workloads - Pods](docs/images/workloads-pods.png)
+
+![Workloads - Deployments](docs/images/workloads-deployments.png)
+
+Pod에서 `l`을 누르면 로그를 실시간으로 따라가고, `y`를 누르면 YAML을 보여줍니다.
+
+![Pod 로그](docs/images/pod-logs.png)
+
+![Pod YAML](docs/images/pod-yaml.png)
+
+Deployment에서 `S`를 누르면 replicas를 입력받아 스케일합니다.
+
+![스케일 다이얼로그](docs/images/dialog-scale.png)
+
+### Network
+
+![Network - Services](docs/images/network-services.png)
+
+Service나 Pod에서 `p`로 시작한 포트포워딩은 Port-forwards 하위 탭에서 관리합니다.
+
+![Network - Port-forwards](docs/images/network-portforwards.png)
+
+Cilium 하위 탭에서는 에이전트 Pod의 `cilium-dbg status`를 바로 확인할 수 있습니다.
+
+![Cilium 상태](docs/images/network-cilium-status.png)
+
+### Storage
+
+![Storage - PVC](docs/images/storage-pvc.png)
+
+local-path 저장 경로의 실제 디스크 사용량을 PVC별로 계산합니다.
+
+![Storage - Local-path 사용량](docs/images/storage-localpath.png)
+
+### Config
+
+![Config - ConfigMaps](docs/images/config-configmaps.png)
+
+### Host (K3S 관리)
+
+k3s 서비스 상태, 버전, API 서버 상태, 데이터스토어, 디스크 사용량을 보여주고 서비스를 제어합니다.
+
+![Host - Service](docs/images/host-service.png)
+
+`l`을 누르면 `journalctl -u k3s` 로그를 실시간으로 보여주며, 오류와 경고는 색으로 구분합니다.
+
+![Host - k3s 서비스 로그](docs/images/host-journal.png)
+
+`/etc/rancher/k3s/config.yaml`을 보고 편집합니다. 토큰처럼 민감한 값은 가려서 표시합니다.
+
+![Host - config.yaml](docs/images/host-config.png)
+
+![Host - Manifests](docs/images/host-manifests.png)
+
+인증서는 만료가 빠른 순서로 정렬되며, 30일 이내 만료는 노란색, 만료된 인증서는 빨간색으로 표시합니다.
+
+![Host - Certificates](docs/images/host-certificates.png)
+
+![Host - Containers](docs/images/host-containers.png)
+
+![Host - Images](docs/images/host-images.png)
+
+### Helm
+
+![Helm - Releases](docs/images/helm-releases.png)
+
+### 노드, 네임스페이스 선택, 도움말
+
+`:nodes` 명령으로 노드 목록을 열고 cordon, uncordon, drain을 실행합니다.
+
+![Nodes](docs/images/nodes.png)
+
+`n`을 누르면 네임스페이스를 고를 수 있으며, 입력하면 목록이 걸러집니다.
+
+![네임스페이스 선택](docs/images/dialog-namespace.png)
+
+`?`를 누르면 공통 키와 현재 화면에서 쓸 수 있는 작업 키를 모두 보여줍니다.
+
+![도움말](docs/images/help.png)
+
+### 보호 네임스페이스 삭제 확인
+
+`kube-system` 같은 보호 네임스페이스의 리소스를 삭제하거나 변경하려면 리소스 이름을 다시 입력해야 합니다.
+
+![보호 네임스페이스 삭제 확인](docs/images/dialog-delete-protected.png)
+
 ## 요구 사항
 
-- K3S가 설치된 Linux 서버 (systemd 사용)
-- root 권한 (K3S kubeconfig는 기본 권한이 `0600`입니다)
+- K3S 노드에서 호스트 관리까지 쓰려면: K3S가 설치된 Linux 서버(systemd 사용)와 root 권한이 필요합니다 (K3S kubeconfig는 기본 권한이 `0600`입니다).
+- 다른 Kubernetes 클러스터에 붙이려면: 접속할 수 있는 kubeconfig와 `kubectl`만 있으면 됩니다.
 - 빌드할 때만 Go 1.27 이상이 필요합니다. 실행 파일은 정적 바이너리 하나입니다.
 - 선택: `helm`(Helm 탭), metrics-server(CPU·메모리 표시, K3S에 기본 포함)
 
@@ -35,10 +143,13 @@ sudo bin/k3stui --check   # 환경 점검
 sudo bin/k3stui           # 저장소에서 바로 실행 (conf/ 자동 인식)
 ```
 
-`--check`는 root 권한, API 서버, k3s 서비스, data-dir, 데이터스토어, metrics-server, helm을 점검해 다음과 같이 보여줍니다.
+`--check`는 kubeconfig, API 서버, 배포판, metrics-server, helm, kubectl을 점검하고,
+호스트 관리가 켜져 있으면 root 권한, k3s 서비스, data-dir, 데이터스토어까지 확인해 다음과 같이 보여줍니다.
 
 ```
-[OK  ] API 서버        v1.36.5+k3s1 (/etc/rancher/k3s/k3s.yaml)
+[OK  ] kubeconfig      /etc/rancher/k3s/k3s.yaml (K3S 기본 경로)
+[OK  ] API 서버        v1.36.5+k3s1  https://127.0.0.1:6443 (context: default)
+[OK  ] 배포판          K3S (API 서버: 로컬)
 [OK  ] k3s 서비스      k3s.service active/running
 [OK  ] data-dir        /data2/k3s
 [OK  ] 데이터스토어    sqlite /data2/k3s/server/db/state.db
@@ -67,19 +178,74 @@ sudo bin/install.sh --uninstall     # 제거 (설정과 로그는 남깁니다)
 | 옵션 | 설명 |
 |---|---|
 | `--config <파일>` | 설정 파일을 지정합니다 |
-| `--kubeconfig <파일>` | kubeconfig를 지정합니다 (기본 `/etc/rancher/k3s/k3s.yaml`) |
+| `--kubeconfig <파일>` | kubeconfig를 지정합니다 (기본: 자동 탐색, 아래 참고) |
+| `--context <이름>` | kubeconfig의 context를 고릅니다 (기본: current-context) |
+| `--distribution <배포판>` | 배포판을 직접 지정합니다 (`auto`, `k3s`, `rke2`, `kubeadm`, `eks`, `gke`, `kubernetes`) |
 | `--read-only` | 모든 변경 작업을 막습니다 |
 | `-n <네임스페이스>` | 시작 네임스페이스를 지정합니다 (`all`은 전체) |
-| `--view <탭>` | 시작 탭을 지정합니다 (`dashboard`, `workloads`, `network`, `storage`, `config`, `host`, `helm`) |
+| `--view <탭>` | 시작 탭을 지정합니다 (`dashboard`, `workloads`, `network`, `storage`, `config`, `host`, `helm`). Host 탭이 없으면 대시보드로 시작합니다 |
 | `--check` | 환경을 점검하고 종료합니다 |
+| `--columns [리소스]` | 컬럼 재정의(views.d)에 쓸 리소스 이름과 내장 컬럼을 출력하고 종료합니다 |
 | `--dump <소스>` | 소스 하나를 표로 출력하고 종료합니다 (예: `pods`, `nodes`, `service`, `certs`, `backups`, `images`, `releases`) |
 | `--version` | 버전을 출력합니다 |
 
-설정 파일은 `--config` → `$K3STUI_CONF` → `<설치 경로>/conf/k3stui.yaml` → `/etc/k3stui/k3stui.yaml` 순서로 찾습니다.
-파일이 없어도 내장 기본값으로 동작합니다.
+설정 파일은 다음 순서로 찾습니다. 파일이 없어도 내장 기본값으로 동작합니다.
 
-일반 사용자가 읽을 수 있는 kubeconfig를 `--kubeconfig`로 지정하면 root 없이도 실행할 수 있습니다.
+1. `--config <파일>`
+2. `$K3STUI_CONF`
+3. `~/.config/k3stui/k3stui.yaml` (사용자별 설정, 설치본을 고치지 않고 클러스터별 설정을 둘 때)
+4. `<설치 경로>/conf/k3stui.yaml`
+5. `/etc/k3stui/k3stui.yaml`
+
+`keybindings.yaml`, `theme.yaml`, `views.d/`는 고른 설정 파일과 같은 디렉터리에서 찾습니다.
+
+kubeconfig는 다음 순서로 찾고, 자동 탐색 후보 중 context와 API 서버 주소가 실제로 들어 있는 첫 파일을 씁니다.
+그래서 내용이 빈 `~/.kube/config`가 있어도 건너뜁니다.
+
+1. `--kubeconfig`
+2. 설정 파일의 `cluster.kubeconfig`
+3. `$KUBECONFIG` (여러 파일을 `:`로 이은 형식 포함)
+4. `~/.kube/config`
+5. `/etc/rancher/k3s/k3s.yaml` (K3S)
+6. `/etc/rancher/rke2/rke2.yaml` (RKE2)
+7. `/etc/kubernetes/admin.conf` (kubeadm)
+
+일반 사용자도 읽을 수 있는 kubeconfig가 있으면 root 없이 실행할 수 있습니다.
 이때 Kubernetes 리소스 기능만 쓸 수 있고, 서비스 제어·설정 편집·백업 같은 호스트 기능은 비활성화됩니다.
+
+## 다른 Kubernetes 클러스터에서 사용
+
+k3stui는 시작할 때 배포판과 API 서버 위치를 판별해 동작 모드를 정합니다.
+
+| 상황 | 동작 |
+|---|---|
+| K3S 서버 노드에서 실행 (API 서버가 이 호스트) | 모든 기능을 씁니다. 탭은 7개(Host 포함)입니다 |
+| 원격 K3S, kubeadm, RKE2, EKS, GKE 등 | Host 탭과 대시보드 호스트 패널을 숨기고, 대시보드 오른쪽에 연결 정보(배포판·context·API 서버·kubeconfig)를 보여줍니다. 탭은 6개입니다 |
+
+- **배포판 판별**: API 서버 버전(`+k3s`, `+rke2`, `-eks-`, `-gke.`)을 보고, 알 수 없으면 `kube-system/kubeadm-config` ConfigMap이 있는지로 kubeadm을 확인합니다. 그래도 모르면 일반 Kubernetes로 봅니다.
+- **로컬 판별**: API 서버 주소가 루프백이거나 이 호스트의 네트워크 인터페이스 IP이면 로컬로 봅니다.
+- **헤더**: 로컬 K3S 모드에서는 호스트 이름과 k3s 서비스 상태를, 그 밖에는 `ctx: <context>`를 표시합니다.
+- **kubectl**: 로컬 K3S면 `k3s kubectl`, 그 밖에는 PATH의 `kubectl`을 쓰며, kubeconfig와 context를 함께 넘깁니다. Helm도 같은 kubeconfig와 `--kube-context`를 씁니다.
+- **local-path 사용량**: `rancher.io/local-path` StorageClass가 있고 API 서버가 로컬일 때만 보여줍니다.
+
+설정 예제 [conf/examples/k3stui-k8s.yaml](conf/examples/k3stui-k8s.yaml)에 각 항목의 의미와 권장값을 정리해 두었습니다.
+
+```bash
+mkdir -p ~/.config/k3stui
+cp conf/examples/k3stui-k8s.yaml ~/.config/k3stui/k3stui.yaml   # 사용자 설정으로 복사
+k3stui --context prod-cluster                                   # 이후에는 옵션 없이도 이 설정을 씁니다
+```
+
+예시:
+
+```bash
+k3stui --kubeconfig ~/.kube/config --context prod-cluster      # 원격 클러스터
+k3stui --context kind-dev                                       # $KUBECONFIG 또는 ~/.kube/config의 context
+sudo k3stui --distribution kubernetes                           # K3S 노드지만 리소스 관리만 쓰기
+```
+
+호스트 관리 사용 여부는 설정 파일의 `cluster.host_management`(`auto`, `enabled`, `disabled`)로 바꿀 수 있습니다.
+kubeadm 노드의 호스트 관리(kubelet, `/etc/kubernetes/manifests`, `kubeadm certs`, etcd 스냅샷)는 아직 지원하지 않습니다.
 
 ## 화면 구성
 
@@ -161,14 +327,20 @@ Nodes, Events, Namespaces처럼 탭에 없는 리소스는 명령 모드(`:nodes
 
 | 파일 | 내용 |
 |---|---|
-| `k3stui.yaml` | K3S 경로, 갱신 주기, 시작 화면, 안전 장치, 백업 위치·보관 개수, 외부 도구 경로, 로그 위치 |
+| `k3stui.yaml` | 클러스터 접속(배포판·kubeconfig·context·호스트 관리), K3S 경로, 갱신 주기, 시작 화면, 안전 장치, 백업 위치·보관 개수, 외부 도구 경로, 로그 위치 |
 | `keybindings.yaml` | 공통 키와 작업 키 재정의 (작업 ID는 `?` 도움말 화면에 표시됩니다) |
 | `theme.yaml` | `dark` / `light` 색상 팔레트 |
-| `views.d/*.yaml` | 리소스별 표시 컬럼 재정의 (예제 `*.yaml.example` 포함) |
+| `views.d/*.yaml` | 리소스별 표시 컬럼 재정의. 항목·path 문법·리소스별 내장 컬럼은 [conf/views.d/README.md](conf/views.d/README.md)에 있습니다 |
+| `examples/k3stui-k8s.yaml` | 일반 Kubernetes 클러스터용 설정 예제 |
 
 자주 바꾸는 항목은 다음과 같습니다.
 
 ```yaml
+cluster:
+  distribution: auto             # auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
+  kubeconfig: ""                 # 비우면 자동 탐색합니다
+  context: ""                    # 비우면 current-context를 씁니다
+  host_management: auto          # auto | enabled | disabled
 k3s:
   data_dir: auto                 # config.yaml의 data-dir을 자동으로 읽습니다
 safety:
@@ -231,9 +403,12 @@ cd src && go test -tags e2e ./internal/kube/ -v       # 실제 K3S 대상 통합
 
 | 증상 | 확인할 점 |
 |---|---|
-| `root 권한이 필요합니다` | `sudo`로 실행하거나 `--kubeconfig`로 읽을 수 있는 파일을 지정합니다 |
+| `읽을 수 있는 kubeconfig가 없습니다` | K3S 노드라면 `sudo`로 실행하고, 다른 클러스터라면 `--kubeconfig`로 파일을 지정합니다 |
+| 엉뚱한 클러스터에 연결됩니다 | `--check`의 kubeconfig 항목에서 어떤 파일을 골랐는지(출처 포함) 확인하고, `--kubeconfig`·`--context`로 지정합니다 |
+| Host 탭이 보이지 않습니다 | `--check`의 `호스트 관리` 줄에 이유가 나옵니다. 로컬 K3S가 아니면 숨기며, `cluster.host_management: enabled`로 강제할 수 있습니다 |
 | CPU·메모리가 `-`로 표시됩니다 | metrics-server Pod 상태를 확인합니다 (`--check`의 metrics-server 항목) |
 | Helm 탭에 오류가 표시됩니다 | `helm`이 PATH에 있는지, 또는 `tools.helm` 경로를 확인합니다 |
 | 데이터스토어가 `unknown`으로 표시됩니다 | `k3s.data_dir`이 실제 data-dir과 같은지 확인합니다 |
+| 시작 화면 아래에 `설정 경고`가 나옵니다 | `k3stui --check`의 `[WARN]` 줄에 파일과 이유가 나옵니다. views.d 문제는 [conf/views.d/README.md](conf/views.d/README.md)의 「검증과 문제 해결」을 참고하세요 |
 | 화면이 깨집니다 | 256색 이상을 지원하는 터미널과 `TERM=xterm-256color`를 사용합니다 |
 | 동작 기록을 보고 싶습니다 | `/var/log/k3stui/k3stui.log`(앱 로그), `/var/log/k3stui/audit.log`(변경 작업) |

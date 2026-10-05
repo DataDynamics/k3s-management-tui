@@ -4,8 +4,11 @@ package kube
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -17,7 +20,9 @@ import (
 
 // Client는 클러스터 접근에 필요한 클라이언트 묶음입니다.
 type Client struct {
-	Kubeconfig string
+	Kubeconfig string // 사용한 kubeconfig (':'로 이어진 목록일 수 있습니다)
+	Context    string // 실제로 쓰는 context 이름
+	Server     string // API 서버 주소
 	REST       *rest.Config
 	Core       kubernetes.Interface
 	Dynamic    dynamic.Interface
@@ -29,10 +34,18 @@ type Client struct {
 }
 
 // New는 kubeconfig로 클라이언트를 만들고 서버 버전과 사용 가능한 리소스를 조회합니다.
-func New(kubeconfig string) (*Client, error) {
-	rc, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+// kubeContext가 비어 있으면 kubeconfig의 current-context를 씁니다.
+func New(kubeconfig, kubeContext string) (*Client, error) {
+	cc := clientConfig(kubeconfig, kubeContext)
+	rc, err := cc.ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("kubeconfig 로딩 실패 (%s): %w", kubeconfig, err)
+	}
+	ctxName := kubeContext
+	if ctxName == "" {
+		if raw, err := cc.RawConfig(); err == nil {
+			ctxName = raw.CurrentContext
+		}
 	}
 	rc.QPS, rc.Burst = 50, 100
 	rc.Timeout = 30 * time.Second
@@ -49,7 +62,7 @@ func New(kubeconfig string) (*Client, error) {
 		return nil, err
 	}
 	c := &Client{
-		Kubeconfig: kubeconfig, REST: rc, Core: core, Dynamic: dyn, Metrics: mc,
+		Kubeconfig: kubeconfig, Context: ctxName, Server: rc.Host, REST: rc, Core: core, Dynamic: dyn, Metrics: mc,
 		Discovery: core.Discovery(),
 	}
 	sv, err := c.Discovery.ServerVersion()
@@ -59,6 +72,55 @@ func New(kubeconfig string) (*Client, error) {
 	c.ServerVersion = sv.GitVersion
 	c.refreshAvailable()
 	return c, nil
+}
+
+func clientConfig(kubeconfig, kubeContext string) clientcmd.ClientConfig {
+	rules := &clientcmd.ClientConfigLoadingRules{Precedence: filepath.SplitList(kubeconfig)}
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules,
+		&clientcmd.ConfigOverrides{CurrentContext: kubeContext})
+}
+
+// ServerURL은 연결하지 않고 kubeconfig에서 API 서버 주소만 읽습니다.
+func ServerURL(kubeconfig, kubeContext string) (string, error) {
+	rc, err := clientConfig(kubeconfig, kubeContext).ClientConfig()
+	if err != nil {
+		return "", err
+	}
+	return rc.Host, nil
+}
+
+// HasProvisioner는 해당 provisioner를 쓰는 StorageClass가 있는지 확인합니다.
+func (c *Client) HasProvisioner(ctx context.Context, provisioner string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	list, err := c.Core.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false
+	}
+	for _, sc := range list.Items {
+		if sc.Provisioner == provisioner {
+			return true
+		}
+	}
+	return false
+}
+
+// UsableKubeconfig는 kubeconfig를 읽을 수 있고 쓸 수 있는 context(서버 주소 포함)가 있는지 확인합니다.
+// ~/.kube/config처럼 내용이 빈 파일을 건너뛰기 위해 씁니다.
+func UsableKubeconfig(kubeconfig, kubeContext string) error {
+	for _, p := range filepath.SplitList(kubeconfig) {
+		if _, err := os.Stat(p); err != nil {
+			return err
+		}
+	}
+	rc, err := clientConfig(kubeconfig, kubeContext).ClientConfig()
+	if err != nil {
+		return err
+	}
+	if rc.Host == "" {
+		return fmt.Errorf("API 서버 주소가 없습니다")
+	}
+	return nil
 }
 
 // refreshAvailable은 discovery로 서버가 제공하는 리소스 목록을 캐시합니다.

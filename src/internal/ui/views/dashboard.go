@@ -230,8 +230,30 @@ func pctf(used, total int64) float64 {
 	return float64(used) * 100 / float64(total)
 }
 
+// connLines는 호스트 관리가 꺼져 있을 때 오른쪽 패널에 보여줄 접속 정보입니다.
+func (d *Dashboard) connLines() []string {
+	env := d.env
+	st := env.Styles
+	label := func(s string) string { return st.Muted.Render(padRight(s, 12)) }
+	out := []string{label("배포판") + kube.DistroName(env.Distro)}
+	if env.Kube != nil {
+		out = append(out,
+			label("context")+env.Kube.Context,
+			label("API server")+env.Kube.Server)
+	}
+	out = append(out,
+		label("kubeconfig")+env.Cfg.Cluster.Kubeconfig,
+		label("")+st.Muted.Render("("+env.Cfg.Cluster.KubeconfigSource+")"),
+		label("호스트 관리")+st.Warn.Render("꺼짐"),
+		label("")+st.Muted.Render(env.HostReason))
+	return out
+}
+
 func (d *Dashboard) hostLines() []string {
 	env := d.env
+	if !env.HostEnabled {
+		return d.connLines()
+	}
 	st := env.Styles
 	hs := env.HostState
 	label := func(s string) string { return st.Muted.Render(padRight(s, 14)) }
@@ -347,14 +369,14 @@ func (d *Dashboard) View(width, height int) string {
 	if width >= 110 {
 		lw := width / 2
 		left := panel(st.Panel, st.PanelTitle, "클러스터", cl, lw)
-		right := panel(st.Panel, st.PanelTitle, "K3S 호스트", hl, width-lw)
+		right := panel(st.Panel, st.PanelTitle, d.rightTitle(), hl, width-lw)
 		// 높이를 맞춥니다
 		h := max(lipgloss.Height(left), lipgloss.Height(right))
 		left = panel(st.Panel.Height(h), st.PanelTitle, "클러스터", cl, lw)
-		right = panel(st.Panel.Height(h), st.PanelTitle, "K3S 호스트", hl, width-lw)
+		right = panel(st.Panel.Height(h), st.PanelTitle, d.rightTitle(), hl, width-lw)
 		top = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	} else {
-		top = panel(st.Panel, st.PanelTitle, "클러스터", cl, width) + "\n" + panel(st.Panel, st.PanelTitle, "K3S 호스트", hl, width)
+		top = panel(st.Panel, st.PanelTitle, "클러스터", cl, width) + "\n" + panel(st.Panel, st.PanelTitle, d.rightTitle(), hl, width)
 	}
 	nodes := panel(st.Panel, st.PanelTitle, "노드", append([]string{}, d.nodes...), width)
 
@@ -420,4 +442,11 @@ func (d *Dashboard) Close()            {}
 // padRight는 표시 폭(한글 2칸) 기준으로 오른쪽을 채웁니다.
 func padRight(s string, w int) string {
 	return s + strings.Repeat(" ", max(1, w-ansi.StringWidth(s)))
+}
+
+func (d *Dashboard) rightTitle() string {
+	if d.env.HostEnabled {
+		return kube.DistroName(d.env.Distro) + " 호스트"
+	}
+	return "연결 정보"
 }

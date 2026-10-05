@@ -2,9 +2,21 @@
 # 이 파일이 없어도 내장 기본값으로 동작합니다. 바꾸고 싶은 값만 남겨도 됩니다.
 # 탐색 순서: --config → $K3STUI_CONF → <설치 경로>/conf/k3stui.yaml → /etc/k3stui/k3stui.yaml
 
+cluster:
+  # 배포판: auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
+  # auto는 API 서버 버전(+k3s, +rke2, -eks-, -gke.)과 kubeadm-config ConfigMap으로 판별합니다.
+  distribution: auto
+  # 비우면 --kubeconfig → $KUBECONFIG → ~/.kube/config → /etc/rancher/k3s/k3s.yaml
+  #        → /etc/rancher/rke2/rke2.yaml → /etc/kubernetes/admin.conf 순서로 쓸 수 있는 파일을 찾습니다.
+  kubeconfig: ""
+  context: ""                       # 비우면 kubeconfig의 current-context (--context로도 지정 가능)
+  # Host 탭(서비스 제어·config.yaml·백업 등): auto | enabled | disabled
+  # auto는 K3S이고 API 서버가 이 호스트에 있을 때만 켭니다.
+  host_management: auto
+
+# 아래 k3s 항목은 Host 탭(로컬 K3S 관리)에서만 씁니다.
 k3s:
   config_file: /etc/rancher/k3s/config.yaml
-  kubeconfig: /etc/rancher/k3s/k3s.yaml
   service_name: k3s                 # agent 노드면 k3s-agent
   binary: /usr/local/bin/k3s
   data_dir: auto                    # auto = config.yaml의 data-dir 사용, 없으면 /var/lib/rancher/k3s

@@ -14,8 +14,9 @@ import (
 
 // Client는 helm 명령 실행기입니다. KUBECONFIG는 Runner 환경변수로 넘깁니다.
 type Client struct {
-	Binary string
-	Run    executil.Runner
+	Binary  string
+	Context string // 비우면 kubeconfig의 current-context를 씁니다
+	Run     executil.Runner
 }
 
 // Release는 helm list 결과 한 줄입니다.
@@ -30,6 +31,9 @@ type Release struct {
 }
 
 func (c *Client) helm(ctx context.Context, args ...string) ([]byte, error) {
+	if c.Context != "" {
+		args = append(args, "--kube-context", c.Context)
+	}
 	return c.Run.Run(ctx, c.Binary, args...)
 }
 

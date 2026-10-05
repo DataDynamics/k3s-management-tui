@@ -160,8 +160,9 @@ jobs:
       - name: K3s 설치
         run: |
           curl -sfL https://get.k3s.io | sudo INSTALL_K3S_EXEC="--disable=traefik" sh -
+          # API 서버가 응답한 뒤에도 노드 등록까지 몇 초가 걸리므로, 노드가 생길 때까지 기다린 다음 Ready를 기다립니다
           for i in $(seq 1 60); do
-            sudo k3s kubectl get --raw /readyz 2>/dev/null | grep -q ok && break
+            [ -n "$(sudo k3s kubectl get nodes -o name 2>/dev/null)" ] && break
             sleep 5
           done
           sudo k3s kubectl wait --for=condition=Ready node --all --timeout=180s

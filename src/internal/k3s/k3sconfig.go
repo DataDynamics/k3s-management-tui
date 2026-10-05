@@ -13,7 +13,7 @@ import (
 
 // LoadConfig는 /etc/rancher/k3s/config.yaml(+ config.yaml.d)을 읽습니다. 파일이 없으면 빈 설정입니다.
 func (s *System) LoadConfig() (*host.Config, error) {
-	return LoadK3sConfig(s.cfg.K3s.ConfigFile)
+	return LoadK3sConfig(s.fl.configFile)
 }
 
 // LoadK3sConfig는 K3S 설정과 drop-in 파일을 읽어 병합합니다.
@@ -59,7 +59,7 @@ func (s *System) WriteConfig(content []byte) (string, error) {
 	if err := host.ValidateYAML(content); err != nil {
 		return "", err
 	}
-	return host.WriteFileWithBackup(s.cfg.K3s.ConfigFile, content, filepath.Join(s.cfg.Backup.Dir, "config"), 0o644, s.now())
+	return host.WriteFileWithBackup(s.fl.configFile, content, filepath.Join(s.cfg.Backup.Dir, "config"), 0o644, s.now())
 }
 
 // cutFlag는 "root-dir=/x" 또는 "--root-dir=/x"에서 값을 꺼냅니다.

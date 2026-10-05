@@ -38,6 +38,8 @@ type Env struct {
 	// HostEnabled가 false면 Host 탭과 대시보드 호스트 패널을 숨깁니다. HostReason은 그 이유입니다.
 	HostEnabled bool
 	HostReason  string
+	// KubectlBase는 노드 구현이 알려준 kubectl 명령입니다 (로컬 K3S·RKE2 노드일 때만, 없으면 nil).
+	KubectlBase []string
 	// LocalPath는 local-path 사용량 화면을 보여줄지 여부입니다 (local-path StorageClass가 있고 로컬 API 서버일 때).
 	LocalPath bool
 
@@ -65,9 +67,6 @@ type HostStatus struct {
 	Certs     []host.CertInfo
 	Updated   time.Time
 }
-
-// LocalK3s는 TUI가 K3S 서버 노드에서 실행 중인지 알려줍니다.
-func (e *Env) LocalK3s() bool { return e.Distro == "k3s" && e.LocalAPI }
 
 // LevelStyle은 행 상태 색상입니다.
 func (e *Env) LevelStyle(l kube.Level) *lipgloss.Style {

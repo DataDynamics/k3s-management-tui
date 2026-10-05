@@ -176,17 +176,36 @@ func journalAction() *Action {
 		}}
 }
 
-// controlPlaneIP는 노드 추가 명령에 넣을 컨트롤 플레인 노드 IP입니다.
+// controlPlaneIP는 노드 추가 명령에 넣을 서버 노드 IP입니다.
+// control-plane 라벨이 있는 노드 → 이 호스트와 이름이 같은 노드 → 첫 노드 순으로 고릅니다.
+// (RKE2는 노드가 Ready가 되기 전에는 control-plane 라벨이 없습니다)
 func controlPlaneIP(env *Env) string {
-	if env.Store != nil {
-		for _, u := range env.Store.List(kube.GVRNodes, "") {
-			n := kube.To[corev1.Node](u)
-			if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; ok {
-				if a := kube.NodeInternalIP(n); a != "" {
-					return a
-				}
-			}
+	if env.Store == nil {
+		return "<서버 IP>"
+	}
+	hostname, _ := os.Hostname()
+	var byName, first string
+	for _, u := range env.Store.List(kube.GVRNodes, "") {
+		n := kube.To[corev1.Node](u)
+		ip := kube.NodeInternalIP(n)
+		if ip == "" {
+			continue
 		}
+		if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; ok {
+			return ip
+		}
+		if n.Name == hostname && byName == "" {
+			byName = ip
+		}
+		if first == "" {
+			first = ip
+		}
+	}
+	switch {
+	case byName != "":
+		return byName
+	case first != "":
+		return first
 	}
 	return "<서버 IP>"
 }
@@ -402,12 +421,13 @@ func newManifestSource(h host.Host) Source {
 	}
 	if caps.ManifestSkip {
 		s.actions = append(s.actions, &Action{ID: "toggle_skip", Keys: []string{"s"}, Label: "skip 전환", Mutating: true, NeedRoot: true, Confirm: ConfirmYesNo,
-			ConfirmBody: func(_ *Env, row Row) string {
+			ConfirmBody: func(env *Env, row Row) string {
 				m := row.Data.(host.Manifest)
+				name := kube.DistroName(env.Host.Distro())
 				if m.Skipped {
-					return m.Rel + ".skip 을 지워 K3S가 다시 이 manifest를 배포하게 합니다."
+					return m.Rel + ".skip 을 지워 " + name + "가 다시 이 manifest를 배포하게 합니다."
 				}
-				return m.Rel + ".skip 을 만들어 K3S가 이 manifest를 더 이상 적용하지 않게 합니다.\n(이미 배포된 리소스는 지워지지 않습니다)"
+				return m.Rel + ".skip 을 만들어 " + name + "가 이 manifest를 더 이상 적용하지 않게 합니다.\n(이미 배포된 리소스는 지워지지 않습니다)"
 			},
 			Do: func(env *Env, row Row, _ string) (string, error) {
 				m := row.Data.(host.Manifest)

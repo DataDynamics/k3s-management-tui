@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,19 +119,19 @@ func TestEditorAndKubectl(t *testing.T) {
 	if got := cfg.EditorCommand(); got[0] != "vim" {
 		t.Errorf("conf editor 우선순위 실패: %v", got)
 	}
-	if got := cfg.KubectlCommand(true); got[0] != "/usr/local/bin/k3s" || got[1] != "kubectl" {
-		t.Errorf("로컬 K3S kubectl 명령: %v", got)
+	if got := cfg.KubectlCommand([]string{"/usr/local/bin/k3s", "kubectl"}); got[0] != "/usr/local/bin/k3s" || got[1] != "kubectl" {
+		t.Errorf("노드 kubectl 명령: %v", got)
 	}
 	// 로컬 K3S가 아니면 PATH의 kubectl을 씁니다.
 	bin := t.TempDir()
 	write(t, filepath.Join(bin, "kubectl"), "#!/bin/sh\n")
 	os.Chmod(filepath.Join(bin, "kubectl"), 0o755)
 	t.Setenv("PATH", bin)
-	if got := cfg.KubectlCommand(false); len(got) != 1 || got[0] != filepath.Join(bin, "kubectl") {
+	if got := cfg.KubectlCommand(nil); len(got) != 1 || got[0] != filepath.Join(bin, "kubectl") {
 		t.Errorf("PATH kubectl 명령: %v", got)
 	}
 	cfg.Tools.Kubectl = "/opt/kubectl --v=0"
-	if got := cfg.KubectlCommand(true); got[0] != "/opt/kubectl" || len(got) != 2 {
+	if got := cfg.KubectlCommand([]string{"/var/lib/rancher/rke2/bin/kubectl"}); got[0] != "/opt/kubectl" || len(got) != 2 {
 		t.Errorf("tools.kubectl 우선순위: %v", got)
 	}
 	if !cfg.IsProtected("kube-system") || cfg.IsProtected("default") {
@@ -165,6 +166,13 @@ func TestClusterValidate(t *testing.T) {
 	if err := cfg.Validate(); err == nil {
 		t.Error("모르는 배포판을 허용함")
 	}
+	for _, removed := range []string{"eks", "gke"} {
+		cfg = Default()
+		cfg.Cluster.Distribution = removed
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "kubernetes 또는 auto") {
+			t.Errorf("%s는 지원하지 않는다는 안내가 필요함: %v", removed, err)
+		}
+	}
 	cfg = Default()
 	cfg.Cluster.HostManagement = "maybe"
 	if err := cfg.Validate(); err == nil {
@@ -179,5 +187,17 @@ func TestClusterValidate(t *testing.T) {
 	}
 	if cfg.Cluster.Kubeconfig != "/old.yaml" || cfg.Cluster.Distribution != DistroK3s {
 		t.Errorf("호환·정규화 실패: %+v", cfg.Cluster)
+	}
+}
+
+func TestResolveRKE2Binary(t *testing.T) {
+	cfg := Default()
+	cfg.RKE2.Binary = "/custom/rke2"
+	if cfg.ResolveRKE2Binary() != "/custom/rke2" {
+		t.Error("직접 지정한 경로를 써야 함")
+	}
+	cfg.RKE2.Binary = "auto"
+	if got := cfg.ResolveRKE2Binary(); got == "" {
+		t.Error("auto는 후보 경로를 돌려줘야 함")
 	}
 }

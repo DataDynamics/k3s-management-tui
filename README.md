@@ -5,8 +5,8 @@ K3s & K8s 서버를 터미널 하나에서 관리하는 TUI입니다.
 k9s처럼 Kubernetes 리소스를 다루는 기능에 더해, 일반 도구가 다루지 않는 **K3S 호스트 쪽 관리 기능**을 함께 제공합니다.
 systemd 서비스 제어, `config.yaml` 편집, 데이터스토어 백업·복원, 자동 배포 manifest, 인증서, containerd 이미지·컨테이너를 한 화면에서 관리할 수 있습니다.
 
-**kubeadm** 노드에서는 같은 Host 탭으로 kubelet, static Pod, PKI 인증서, etcd 스냅샷, 노드 추가 토큰을 관리합니다.
-그 밖의 Kubernetes(RKE2, EKS, GKE, 원격 클러스터 등)에도 붙일 수 있으며, 이때는 호스트 관리 기능을 빼고 리소스 관리 기능만 제공합니다.
+**RKE2** 노드는 K3S와 같은 방식으로, **kubeadm** 노드는 kubelet·static Pod·PKI 인증서·etcd 스냅샷·노드 추가 토큰으로 관리합니다.
+그 밖의 Kubernetes(EKS·GKE·AKS 같은 관리형 클러스터, 원격 클러스터 등)에도 붙일 수 있으며, 이때는 호스트 관리 기능을 빼고 리소스 관리 기능만 제공합니다.
 자세한 내용은 [다른 Kubernetes 클러스터에서 사용](#다른-kubernetes-클러스터에서-사용)을 참고하세요.
 
 - 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
@@ -135,6 +135,7 @@ k3s 서비스 상태, 버전, API 서버 상태, 데이터스토어, 디스크 �
 ## 요구 사항
 
 - K3S 노드에서 호스트 관리까지 쓰려면: K3S가 설치된 Linux 서버(systemd 사용)와 root 권한이 필요합니다 (K3S kubeconfig는 기본 권한이 `0600`입니다).
+- RKE2 노드에서 호스트 관리까지 쓰려면: RKE2가 설치된 노드(systemd 사용)와 root 권한이 필요합니다.
 - kubeadm 노드에서 호스트 관리까지 쓰려면: kubeadm·kubelet·crictl이 있는 노드와 root 권한이 필요합니다. etcdctl은 없어도 됩니다 (etcd 컨테이너 안의 것을 씁니다).
 - 다른 Kubernetes 클러스터에 붙이려면: 접속할 수 있는 kubeconfig와 `kubectl`만 있으면 됩니다.
 - 빌드할 때만 Go 1.27 이상이 필요합니다. 실행 파일은 정적 바이너리 하나입니다.
@@ -186,7 +187,7 @@ sudo bin/install.sh --uninstall     # 제거 (설정과 로그는 남깁니다)
 | `--config <파일>` | 설정 파일을 지정합니다 |
 | `--kubeconfig <파일>` | kubeconfig를 지정합니다 (기본: 자동 탐색, 아래 참고) |
 | `--context <이름>` | kubeconfig의 context를 고릅니다 (기본: current-context) |
-| `--distribution <배포판>` | 배포판을 직접 지정합니다 (`auto`, `k3s`, `rke2`, `kubeadm`, `eks`, `gke`, `kubernetes`) |
+| `--distribution <배포판>` | 배포판을 직접 지정합니다 (`auto`, `k3s`, `rke2`, `kubeadm`, `kubernetes`) |
 | `--read-only` | 모든 변경 작업을 막습니다 |
 | `-n <네임스페이스>` | 시작 네임스페이스를 지정합니다 (`all`은 전체) |
 | `--view <탭>` | 시작 탭을 지정합니다 (`dashboard`, `workloads`, `network`, `storage`, `config`, `host`, `helm`). Host 탭이 없으면 대시보드로 시작합니다 |
@@ -226,13 +227,15 @@ k3stui는 시작할 때 배포판과 API 서버 위치를 판별해 동작 모�
 | 상황 | 동작 |
 |---|---|
 | K3S 서버 노드에서 실행 (API 서버가 이 호스트) | 모든 기능을 씁니다. 탭은 7개(Host 포함)입니다 |
+| RKE2 서버 노드에서 실행 | 모든 기능을 씁니다. Host 탭은 K3S와 같은 구성입니다 (아래 「RKE2 노드 관리」) |
 | kubeadm 컨트롤 플레인 노드에서 실행 | 모든 기능을 씁니다. Host 탭은 kubeadm용으로 구성됩니다 (아래 「kubeadm 노드 관리」) |
-| 원격 K3S·kubeadm, RKE2, EKS, GKE 등 | Host 탭과 대시보드 호스트 패널을 숨기고, 대시보드 오른쪽에 연결 정보(배포판·context·API 서버·kubeconfig)를 보여줍니다. 탭은 6개입니다 |
+| 원격 K3S·RKE2·kubeadm, 관리형 클러스터(EKS, GKE, AKS 등) | Host 탭과 대시보드 호스트 패널을 숨기고, 대시보드 오른쪽에 연결 정보(배포판·context·API 서버·kubeconfig)를 보여줍니다. 탭은 6개입니다 |
 
-- **배포판 판별**: API 서버 버전(`+k3s`, `+rke2`, `-eks-`, `-gke.`)을 보고, 알 수 없으면 `kube-system/kubeadm-config` ConfigMap이 있는지로 kubeadm을 확인합니다. 그래도 모르면 일반 Kubernetes로 봅니다.
+- **배포판 판별**: API 서버 버전(`+k3s`, `+rke2`)을 보고, 알 수 없으면 `kube-system/kubeadm-config` ConfigMap이 있는지로 kubeadm을 확인합니다. 그래도 모르면 일반 Kubernetes(`kubernetes`)로 봅니다.
+  `distribution` 값은 `auto`, `k3s`, `rke2`, `kubeadm`, `kubernetes`이며, 관리형 클러스터는 별도 값 없이 `kubernetes`로 동작합니다.
 - **로컬 판별**: API 서버 주소가 루프백이거나 이 호스트의 네트워크 인터페이스 IP이면 로컬로 봅니다.
 - **헤더**: 로컬 K3S 모드에서는 호스트 이름과 k3s 서비스 상태를, 그 밖에는 `ctx: <context>`를 표시합니다.
-- **kubectl**: 로컬 K3S면 `k3s kubectl`, 그 밖에는 PATH의 `kubectl`을 쓰며, kubeconfig와 context를 함께 넘깁니다. Helm도 같은 kubeconfig와 `--kube-context`를 씁니다.
+- **kubectl**: 로컬 K3S면 `k3s kubectl`, 로컬 RKE2면 `<data-dir>/bin/kubectl`, 그 밖에는 PATH의 `kubectl`을 쓰며, kubeconfig와 context를 함께 넘깁니다. Helm도 같은 kubeconfig와 `--kube-context`를 씁니다.
 - **local-path 사용량**: `rancher.io/local-path` StorageClass가 있고 API 서버가 로컬일 때만 보여줍니다.
 
 설정 예제 [conf/examples/k3stui-k8s.yaml](conf/examples/k3stui-k8s.yaml)에 각 항목의 의미와 권장값을 정리해 두었습니다.
@@ -252,7 +255,22 @@ sudo k3stui --distribution kubernetes                           # K3S 노드지�
 ```
 
 호스트 관리 사용 여부는 설정 파일의 `cluster.host_management`(`auto`, `enabled`, `disabled`)로 바꿀 수 있습니다.
-RKE2 노드의 호스트 관리는 아직 지원하지 않습니다.
+### RKE2 노드 관리
+
+RKE2 서버 노드에서 root로 실행하면 Host 탭이 K3S와 같은 하위 탭으로 구성됩니다. 설정 예제는 [conf/examples/k3stui-rke2.yaml](conf/examples/k3stui-rke2.yaml)에 있습니다.
+
+| 항목 | RKE2에서의 동작 |
+|---|---|
+| 서비스 | `rke2-server` 또는 `rke2-agent` (`rke2.service_name: auto`는 실행 중인 유닛을 고릅니다) |
+| 실행 파일 | `/usr/local/bin/rke2` → `/usr/bin/rke2` → `/opt/rke2/bin/rke2` 순으로 찾습니다 (tarball, RPM 설치 모두 지원) |
+| 설정 | `/etc/rancher/rke2/config.yaml`(+ `config.yaml.d`) 보기·편집, 저장 후 서비스 재시작 질의 |
+| Manifests | `<data-dir>/server/manifests` 보기, `.skip` 전환 |
+| 인증서 | `server/tls`, `server/tls/etcd`, `agent` 인증서. `R`은 서비스 중지 → `rke2 certificate rotate` → 시작 |
+| 백업 | `rke2 etcd-snapshot save`로 etcd 스냅샷을 만들고 RKE2 스냅샷 목록에도 등록됩니다. `R`은 `rke2 server --cluster-reset` 복원 절차를 보여줍니다 |
+| 노드 추가 명령 | get.rke2.io agent 설치, `config.yaml`에 `server: https://<서버>:9345`와 토큰 작성, `rke2-agent` 시작까지 한 번에 보여줍니다 |
+| kubectl, crictl | `<data-dir>/bin/kubectl`, `<data-dir>/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock` |
+
+RKE2에는 `check-config` 명령과 SQLite 데이터스토어가 없어서 Service의 `c` 키와 자동 복원은 나오지 않습니다.
 
 ### kubeadm 노드 관리
 
@@ -330,12 +348,12 @@ Nodes, Events, Namespaces처럼 탭에 없는 리소스는 명령 모드(`:nodes
 | Service | `p` 포트포워딩 |
 | Node | `c` cordon, `u` uncordon, `D` drain |
 | Secret | `v` 값 보기 (감사 로그에 기록됩니다) |
-| Host › Service | `l` 서비스 로그, `r` 재시작, `t` 중지, `a` 시작, `c` 점검(K3S: check-config, kubeadm: certs check-expiration), `J` 노드 추가 명령 |
+| Host › Service | `l` 서비스 로그, `r` 재시작, `t` 중지, `a` 시작, `c` 점검(K3S: check-config, kubeadm: certs check-expiration, RKE2: 없음), `J` 노드 추가 명령 |
 | Host › config.yaml / kubelet config | `v` 파일 보기, `e` 편집, `r` 서비스 재시작 |
 | Host › Static Pods (kubeadm) | `v` 보기, `e` 편집 |
 | Host › Manifests | `v` 보기, `s` `.skip` 전환 |
 | Host › Certificates | `v` 상세, `R` 인증서 갱신 |
-| Host › Backups | `b` 지금 백업, `R` 복원(K3S SQLite) 또는 복원 안내(etcd), `x` 삭제 |
+| Host › Backups | `b` 지금 백업, `R` 복원(K3S SQLite) 또는 복원 안내(K3S·RKE2·kubeadm etcd), `x` 삭제 |
 | Host › Containers | `i` inspect, `l` 로그 |
 | Host › Images | `i` inspect, `x` 삭제, `P` 미사용 이미지 정리 |
 | Helm › Releases | `v` values, `a` 전체 values, `m` manifest, `h` 이력, `R` 롤백, `x` 삭제 |
@@ -363,12 +381,13 @@ Nodes, Events, Namespaces처럼 탭에 없는 리소스는 명령 모드(`:nodes
 | `views.d/*.yaml` | 리소스별 표시 컬럼 재정의. 항목·path 문법·리소스별 내장 컬럼은 [conf/views.d/README.md](conf/views.d/README.md)에 있습니다 |
 | `examples/k3stui-k8s.yaml` | 일반 Kubernetes(원격) 클러스터용 설정 예제 |
 | `examples/k3stui-kubeadm.yaml` | kubeadm 컨트롤 플레인 노드용 설정 예제 |
+| `examples/k3stui-rke2.yaml` | RKE2 서버 노드용 설정 예제 |
 
 자주 바꾸는 항목은 다음과 같습니다.
 
 ```yaml
 cluster:
-  distribution: auto             # auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
+  distribution: auto             # auto | k3s | rke2 | kubeadm | kubernetes
   kubeconfig: ""                 # 비우면 자동 탐색합니다
   context: ""                    # 비우면 current-context를 씁니다
   host_management: auto          # auto | enabled | disabled
@@ -407,7 +426,7 @@ src/            Go 모듈
     ui/         components(표·텍스트 뷰어·다이얼로그), styles, views(화면·소스·작업)
     kube/       client-go 래퍼: Informer 캐시, 리소스 정의, 작업, 포트포워딩, 메트릭
     host/       노드 관리 공통 인터페이스·타입 (systemd, 인증서, 파일 백업, 기능 목록)
-    k3s/        K3S 노드: k3s 서비스, config.yaml, SQLite·etcd, 자동 배포 manifest, 인증서
+    k3s/        K3S·RKE2 노드: 서비스, config.yaml, SQLite·etcd, 자동 배포 manifest, 인증서 (flavor로 구분)
     kubeadm/    kubeadm 노드: kubelet, kubelet 설정, static Pod, PKI, etcd 스냅샷, 노드 추가 토큰
     runtime/    컨테이너 런타임 (crictl)
     helm/       helm CLI 래퍼

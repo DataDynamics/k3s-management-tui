@@ -1,0 +1,54 @@
+# k3stui 설정 예제 — RKE2 서버 노드용
+#
+# RKE2 서버(또는 agent) 노드에서 root로 실행할 때의 설정입니다.
+# 리소스 관리에 더해 Host 탭에서 다음 노드 관리 기능을 씁니다.
+#   - rke2-server(또는 rke2-agent) 서비스 상태·로그·시작·중지·재시작
+#   - /etc/rancher/rke2/config.yaml(+ config.yaml.d) 보기·편집 → 서비스 재시작 질의
+#   - 자동 배포 manifest(/var/lib/rancher/rke2/server/manifests) 보기, .skip 전환
+#   - 인증서 만료 확인, 'rke2 certificate rotate' (서비스 중지 → 갱신 → 시작)
+#   - etcd 스냅샷 ('rke2 etcd-snapshot save'), 복원 절차 안내
+#   - agent 노드 추가 절차 (get.rke2.io 설치 + config.yaml의 server·token + rke2-agent 시작)
+#   - containerd 컨테이너·이미지 (<data-dir>/bin/crictl)
+#
+# RKE2의 kubectl은 보통 PATH에 없습니다. k3stui는 로컬 RKE2 노드에서 <data-dir>/bin/kubectl을 자동으로 씁니다.
+# RKE2에는 check-config 명령과 SQLite 데이터스토어가 없으므로 해당 기능은 나오지 않습니다.
+#
+# 사용 방법:
+#   sudo k3stui --config conf/examples/k3stui-rke2.yaml
+#   또는 설치본의 conf/k3stui.yaml을 이 내용으로 바꿉니다.
+
+cluster:
+  distribution: auto                # API 서버 버전에 +rke2가 있으면 RKE2로 판별합니다
+  kubeconfig: ""                    # 비우면 자동 탐색합니다. 노드에서는 /etc/rancher/rke2/rke2.yaml을 고릅니다
+  context: ""
+  host_management: auto             # RKE2 노드이고 API 서버가 이 호스트에 있으면 Host 탭을 켭니다
+
+rke2:
+  service_name: auto                # auto | rke2-server | rke2-agent (auto는 실행 중인 유닛, 없으면 설치된 유닛)
+  config_file: /etc/rancher/rke2/config.yaml
+  binary: auto                      # auto는 /usr/local/bin/rke2 → /usr/bin/rke2 → /opt/rke2/bin/rke2 순으로 찾습니다
+  data_dir: auto                    # auto = config.yaml의 data-dir, 없으면 /var/lib/rancher/rke2
+
+backup:
+  # 'rke2 etcd-snapshot save --dir <dir>'로 스냅샷을 저장합니다 (k3stui-etcd-<노드>-<시각>).
+  # 편집 전 config.yaml은 config/ 아래에 백업합니다.
+  dir: /var/backups/k3stui
+  keep: 7
+
+safety:
+  read_only: false
+  confirm_destructive: true
+  protected_namespaces: [kube-system, kube-public, kube-node-lease, cattle-system]
+
+tools:
+  kubectl: ""                       # 비우면 <data-dir>/bin/kubectl → PATH의 kubectl 순서로 씁니다
+  helm: helm
+  editor: ""                        # 비우면 $EDITOR → $VISUAL → vi. 노드에 편집기가 있는지 --check로 확인하세요
+  timeout: 30s
+
+logging:
+  file: /var/log/k3stui/k3stui.log
+  level: info
+
+audit:
+  file: /var/log/k3stui/audit.log

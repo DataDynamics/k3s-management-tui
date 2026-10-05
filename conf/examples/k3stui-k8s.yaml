@@ -1,6 +1,7 @@
 # k3stui 설정 예제 — 일반 Kubernetes 클러스터용
 #
-# K3S가 아닌 클러스터(kubeadm, RKE2, EKS, GKE, AKS, kind 등)를 리소스 관리 도구로 쓸 때의 설정입니다.
+# 원격 클러스터나 관리형 클러스터(EKS, GKE, AKS 등)를 리소스 관리 도구로 쓸 때의 설정입니다.
+# K3S·RKE2·kubeadm 노드에서 노드 관리까지 쓰려면 conf/k3stui.yaml 또는 conf/examples/k3stui-kubeadm.yaml을 참고하세요.
 # 이 모드에서는 Host 탭(서비스 제어·config.yaml·데이터스토어 백업 등)이 없으므로 k3s·backup 항목은 적지 않습니다.
 #
 # 사용 방법 (둘 중 하나):
@@ -14,8 +15,9 @@
 # 이 파일에 적지 않은 항목도 모두 내장 기본값을 씁니다.
 
 cluster:
-  # 배포판: auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
-  #   auto는 API 서버 버전(+k3s, +rke2, -eks-, -gke.)과 kube-system/kubeadm-config ConfigMap으로 판별합니다.
+  # 배포판: auto | k3s | rke2 | kubeadm | kubernetes
+  #   auto는 API 서버 버전(+k3s, +rke2)과 kube-system/kubeadm-config ConfigMap으로 판별하고,
+  #   그 밖(EKS·GKE·AKS 등 관리형 클러스터 포함)은 kubernetes로 봅니다.
   #   배포판 이름은 헤더·대시보드 표시와 기능 판단에 씁니다. 판별이 틀릴 때만 직접 지정하세요.
   distribution: auto
 
@@ -31,8 +33,7 @@ cluster:
 
   # Host 탭 사용 여부: auto | enabled | disabled
   #   원격 클러스터에서는 노드의 서비스·파일에 접근할 수 없으므로 disabled를 권장합니다.
-  #   (auto여도 K3S·kubeadm 노드가 아니거나 API 서버가 원격이면 자동으로 꺼집니다)
-  #   kubeadm 노드에서 노드 관리까지 쓰려면 conf/examples/k3stui-kubeadm.yaml을 참고하세요.
+  #   (auto여도 K3S·RKE2·kubeadm 노드가 아니거나 API 서버가 원격이면 자동으로 꺼집니다)
   host_management: disabled
 
 ui:

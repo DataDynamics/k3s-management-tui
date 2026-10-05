@@ -17,6 +17,7 @@ import (
 type Config struct {
 	Cluster     ClusterConfig     `yaml:"cluster"`
 	K3s         K3sConfig         `yaml:"k3s"`
+	RKE2        RKE2Config        `yaml:"rke2"`
 	Kubeadm     KubeadmConfig     `yaml:"kubeadm"`
 	UI          UIConfig          `yaml:"ui"`
 	Safety      SafetyConfig      `yaml:"safety"`
@@ -40,8 +41,6 @@ const (
 	DistroK3s        = "k3s"
 	DistroRKE2       = "rke2"
 	DistroKubeadm    = "kubeadm"
-	DistroEKS        = "eks"
-	DistroGKE        = "gke"
 	DistroKubernetes = "kubernetes"
 )
 
@@ -54,7 +53,7 @@ const (
 
 // ClusterConfig는 접속할 클러스터와 배포판 설정입니다.
 type ClusterConfig struct {
-	Distribution   string `yaml:"distribution"`    // auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
+	Distribution   string `yaml:"distribution"`    // auto | k3s | rke2 | kubeadm | kubernetes
 	Kubeconfig     string `yaml:"kubeconfig"`      // 비우면 자동 탐색 (KubeconfigCandidates 참고)
 	Context        string `yaml:"context"`         // 비우면 kubeconfig의 current-context
 	HostManagement string `yaml:"host_management"` // auto | enabled | disabled
@@ -70,6 +69,30 @@ type K3sConfig struct {
 	ServiceName string `yaml:"service_name"`
 	Binary      string `yaml:"binary"`
 	DataDir     string `yaml:"data_dir"` // auto = config.yaml의 data-dir
+}
+
+// RKE2Config는 RKE2 노드의 Host 탭에서 쓰는 경로와 도구입니다. auto는 설치 상태를 보고 정합니다.
+type RKE2Config struct {
+	ServiceName string `yaml:"service_name"` // auto | rke2-server | rke2-agent
+	ConfigFile  string `yaml:"config_file"`  // /etc/rancher/rke2/config.yaml
+	Binary      string `yaml:"binary"`       // auto | 경로 (/usr/local/bin/rke2, /usr/bin/rke2, /opt/rke2/bin/rke2 순으로 찾습니다)
+	DataDir     string `yaml:"data_dir"`     // auto = config.yaml의 data-dir, 없으면 /var/lib/rancher/rke2
+}
+
+// RKE2BinaryCandidates는 binary: auto일 때 찾는 경로입니다 (tarball, RPM, /opt 설치).
+var RKE2BinaryCandidates = []string{"/usr/local/bin/rke2", "/usr/bin/rke2", "/opt/rke2/bin/rke2"}
+
+// ResolveRKE2Binary는 RKE2 실행 파일 경로를 정합니다. 찾지 못하면 첫 후보를 돌려줍니다.
+func (c *Config) ResolveRKE2Binary() string {
+	if b := c.RKE2.Binary; b != "" && b != "auto" {
+		return b
+	}
+	for _, p := range RKE2BinaryCandidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return RKE2BinaryCandidates[0]
 }
 
 // KubeadmConfig는 kubeadm 노드의 Host 탭에서 쓰는 경로와 도구입니다.
@@ -136,6 +159,7 @@ func Default() *Config {
 			Binary:      "/usr/local/bin/k3s",
 			DataDir:     "auto",
 		},
+		RKE2: RKE2Config{ServiceName: "auto", ConfigFile: "/etc/rancher/rke2/config.yaml", Binary: "auto", DataDir: "auto"},
 		Kubeadm: KubeadmConfig{
 			ServiceName:   "kubelet",
 			KubernetesDir: "/etc/kubernetes",
@@ -269,7 +293,16 @@ func (c *Config) Validate() error {
 	if c.K3s.DataDir == "" {
 		c.K3s.DataDir = "auto"
 	}
-	// kubeadm 경로·도구는 비어 있으면 기본값을 씁니다.
+	// RKE2·kubeadm 경로·도구는 비어 있으면 기본값을 씁니다.
+	r, dr := &c.RKE2, d.RKE2
+	for _, f := range []struct {
+		v   *string
+		def string
+	}{{&r.ServiceName, dr.ServiceName}, {&r.ConfigFile, dr.ConfigFile}, {&r.Binary, dr.Binary}, {&r.DataDir, dr.DataDir}} {
+		if *f.v == "" {
+			*f.v = f.def
+		}
+	}
 	ka, dk := &c.Kubeadm, d.Kubeadm
 	for _, f := range []struct {
 		v   *string
@@ -291,9 +324,11 @@ func (c *Config) Validate() error {
 	}
 	c.Cluster.Distribution = strings.ToLower(c.Cluster.Distribution)
 	switch c.Cluster.Distribution {
-	case DistroAuto, DistroK3s, DistroRKE2, DistroKubeadm, DistroEKS, DistroGKE, DistroKubernetes:
+	case DistroAuto, DistroK3s, DistroRKE2, DistroKubeadm, DistroKubernetes:
+	case "eks", "gke":
+		return fmt.Errorf("cluster.distribution: %q는 지원하지 않습니다. 관리형 클러스터는 kubernetes 또는 auto를 쓰세요", c.Cluster.Distribution)
 	default:
-		return fmt.Errorf("cluster.distribution 값이 올바르지 않습니다: %q (auto, k3s, rke2, kubeadm, eks, gke, kubernetes)", c.Cluster.Distribution)
+		return fmt.Errorf("cluster.distribution 값이 올바르지 않습니다: %q (auto, k3s, rke2, kubeadm, kubernetes)", c.Cluster.Distribution)
 	}
 	if c.Cluster.HostManagement == "" {
 		c.Cluster.HostManagement = HostAuto
@@ -341,20 +376,16 @@ func (c *Config) EditorCommand() []string {
 }
 
 // KubectlCommand는 kubectl 실행 명령(앞부분)을 돌려줍니다.
-// tools.kubectl이 있으면 그 값을 쓰고, 로컬 K3S면 "k3s kubectl"을,
-// 그 밖에는 PATH의 kubectl을 씁니다. PATH에 없으면 k3s 바이너리로 대신합니다.
-func (c *Config) KubectlCommand(localK3s bool) []string {
+// 순서: tools.kubectl → 노드 구현이 알려준 명령(K3S: k3s kubectl, RKE2: <data-dir>/bin/kubectl) → PATH의 kubectl.
+func (c *Config) KubectlCommand(nodeCmd []string) []string {
 	if f := strings.Fields(c.Tools.Kubectl); len(f) > 0 {
 		return f
 	}
-	if localK3s {
-		return []string{c.K3s.Binary, "kubectl"}
+	if len(nodeCmd) > 0 {
+		return nodeCmd
 	}
 	if p, err := exec.LookPath("kubectl"); err == nil {
 		return []string{p}
-	}
-	if _, err := os.Stat(c.K3s.Binary); err == nil {
-		return []string{c.K3s.Binary, "kubectl"}
 	}
 	return []string{"kubectl"}
 }

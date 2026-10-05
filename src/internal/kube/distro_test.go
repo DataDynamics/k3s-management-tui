@@ -16,8 +16,8 @@ func TestDistroFromVersion(t *testing.T) {
 	cases := map[string]string{
 		"v1.36.5+k3s1":        config.DistroK3s,
 		"v1.30.4+rke2r1":      config.DistroRKE2,
-		"v1.29.1-eks-b9c9ed7": config.DistroEKS,
-		"v1.29.1-gke.1589000": config.DistroGKE,
+		"v1.29.1-eks-b9c9ed7": "", // 관리형 클러스터는 kubernetes로 봅니다
+		"v1.29.1-gke.1589000": "",
 		"v1.31.0":             "",
 	}
 	for v, want := range cases {
@@ -37,7 +37,7 @@ func TestDetectDistroKubeadm(t *testing.T) {
 	if d := c.DetectDistro(t.Context()); d != config.DistroKubernetes {
 		t.Errorf("일반 Kubernetes 판별 실패: %s", d)
 	}
-	if DistroName(config.DistroK3s) != "K3S" || DistroName("xyz") != "Kubernetes" {
+	if DistroName(config.DistroK3s) != "K3S" || DistroName(config.DistroRKE2) != "RKE2" || DistroName("eks") != "Kubernetes" {
 		t.Error("표시 이름")
 	}
 }

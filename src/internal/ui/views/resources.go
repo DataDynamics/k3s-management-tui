@@ -121,7 +121,7 @@ func (s *ResourceSource) overrideCells(cols []config.ColumnOverride, u *unstruct
 // ---- kubectl 실행 도우미 ----
 
 func kubectlCmd(env *Env, args ...string) (string, []string) {
-	base := env.Cfg.KubectlCommand(env.LocalK3s())
+	base := env.Cfg.KubectlCommand(env.KubectlBase)
 	all := append(append([]string{}, base[1:]...), "--kubeconfig", env.Cfg.Cluster.Kubeconfig)
 	if c := env.Cfg.Cluster.Context; c != "" {
 		all = append(all, "--context", c)

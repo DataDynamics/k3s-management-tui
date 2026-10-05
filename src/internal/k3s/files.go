@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/DataDynamics/k3s-management-tui/internal/config"
 	"github.com/DataDynamics/k3s-management-tui/internal/host"
 )
 
@@ -39,7 +40,7 @@ func (s *System) SetManifestSkip(path string, skip bool) error {
 	return err
 }
 
-// WriteManifest는 K3S에서는 지원하지 않습니다. 패키지 manifest는 K3S가 시작할 때 덮어쓰므로 .skip으로 관리합니다.
+// WriteManifest는 K3S·RKE2에서는 지원하지 않습니다. 패키지 manifest는 시작할 때 덮어쓰므로 .skip으로 관리합니다.
 func (s *System) WriteManifest(string, []byte) (string, error) { return "", host.ErrUnsupported }
 
 // ---- 인증서 ----
@@ -62,13 +63,13 @@ func (s *System) RotateCertificates(ctx context.Context, progress func(string)) 
 	if progress == nil {
 		progress = func(string) {}
 	}
-	progress("k3s 서비스 중지")
+	progress(s.fl.service + " 서비스 중지")
 	if err := s.ServiceControl(ctx, host.OpStop); err != nil {
 		return err
 	}
-	progress("k3s certificate rotate")
-	_, rotErr := s.k3s(ctx, "certificate", "rotate", "--data-dir", s.DataDir())
-	progress("k3s 서비스 시작")
+	progress(s.fl.cmd + " certificate rotate")
+	_, rotErr := s.cli(ctx, "certificate", "rotate", "--data-dir", s.DataDir())
+	progress(s.fl.service + " 서비스 시작")
 	if err := s.ServiceControl(ctx, host.OpStart); err != nil {
 		return errors.Join(rotErr, err)
 	}
@@ -96,6 +97,9 @@ func (s *System) JoinCommand(_ context.Context, serverIP string) (string, error)
 	tok, err := s.Token()
 	if err != nil {
 		return "", err
+	}
+	if s.fl.distro == config.DistroRKE2 {
+		return BuildRKE2JoinCommand(serverIP, tok), nil
 	}
 	return BuildJoinCommand(serverIP, tok), nil
 }

@@ -103,7 +103,7 @@ func TestLoadK3sConfigWithDropIns(t *testing.T) {
 
 func TestDataDirAndKubeletDirFromConfig(t *testing.T) {
 	s, _, _ := testHost(t)
-	s.cfg.K3s.DataDir = "auto"
+	s.fl.dataDirCfg = "auto"
 	os.MkdirAll(filepath.Dir(s.cfg.K3s.ConfigFile), 0o755)
 	os.WriteFile(s.cfg.K3s.ConfigFile, []byte("data-dir: /data2/k3s\nkubelet-arg:\n  - root-dir=/data2/kubelet\n"), 0o644)
 	if s.DataDir() != "/data2/k3s" {
@@ -356,5 +356,107 @@ func TestServiceControlNeedsRoot(t *testing.T) {
 	s.root = true
 	if err := s.ServiceControl(context.Background(), host.ServiceOp("kill")); err == nil {
 		t.Error("알 수 없는 동작을 허용함")
+	}
+}
+
+// testRKE2는 임시 data-dir을 쓰는 RKE2 root Host를 만듭니다. reply로 systemctl show 응답을 흉내 냅니다.
+func testRKE2(t *testing.T, units map[string]string) (*System, *fakeRunner, string) {
+	t.Helper()
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "rke2")
+	cfg := config.Default()
+	cfg.RKE2.ConfigFile = filepath.Join(dir, "etc", "rke2", "config.yaml")
+	cfg.RKE2.DataDir = dataDir
+	cfg.RKE2.Binary = filepath.Join(dir, "bin", "rke2")
+	cfg.Backup.Dir = filepath.Join(dir, "backups")
+	run := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
+	for unit, state := range units {
+		run.out["systemctl show "+unit] = state
+	}
+	s := NewRKE2System(cfg, run)
+	s.sd.Ctl, s.sd.Root, s.root = run, true, true
+	return s, run, dataDir
+}
+
+func TestRKE2ServiceAutoDetect(t *testing.T) {
+	s, _, _ := testRKE2(t, map[string]string{
+		"rke2-server": "LoadState=loaded\nActiveState=inactive\n",
+		"rke2-agent":  "LoadState=loaded\nActiveState=active\n",
+	})
+	if s.ServiceName() != "rke2-agent" {
+		t.Errorf("실행 중인 유닛을 골라야 함: %s", s.ServiceName())
+	}
+	s, _, _ = testRKE2(t, map[string]string{
+		"rke2-server": "LoadState=loaded\nActiveState=failed\n",
+		"rke2-agent":  "LoadState=not-found\nActiveState=inactive\n",
+	})
+	if s.ServiceName() != "rke2-server" {
+		t.Errorf("설치된 유닛을 골라야 함: %s", s.ServiceName())
+	}
+	if s.Distro() != config.DistroRKE2 {
+		t.Errorf("배포판: %s", s.Distro())
+	}
+}
+
+func TestRKE2PathsAndCommands(t *testing.T) {
+	s, run, dataDir := testRKE2(t, map[string]string{"rke2-server": "LoadState=loaded\nActiveState=active\n"})
+	os.MkdirAll(filepath.Join(dataDir, "bin"), 0o755)
+	os.WriteFile(filepath.Join(dataDir, "bin", "kubectl"), nil, 0o755)
+	os.WriteFile(filepath.Join(dataDir, "bin", "crictl"), nil, 0o755)
+	if got := s.KubectlCommand(); len(got) != 1 || got[0] != filepath.Join(dataDir, "bin", "kubectl") {
+		t.Errorf("RKE2 kubectl: %v", got)
+	}
+	if got := strings.Join(s.CrictlCommand(), " "); got != filepath.Join(dataDir, "bin", "crictl")+" --runtime-endpoint unix:///run/k3s/containerd/containerd.sock" {
+		t.Errorf("RKE2 crictl: %s", got)
+	}
+	caps := s.Caps()
+	if caps.CheckLabel != "" || caps.BackupExtra != "" || !caps.ManifestSkip || !strings.Contains(caps.CertRotateHint, "rke2 certificate rotate") {
+		t.Errorf("RKE2 기능: %+v", caps)
+	}
+	if _, err := s.CheckConfig(context.Background()); err != host.ErrUnsupported {
+		t.Errorf("RKE2는 check-config가 없어야 함: %v", err)
+	}
+	// etcd 데이터스토어와 스냅샷 명령 (state.db가 있어도 RKE2는 SQLite로 보지 않습니다)
+	os.MkdirAll(filepath.Join(dataDir, "server", "db", "etcd"), 0o700)
+	if ds := s.Datastore(); ds.Kind != host.DatastoreEtcd {
+		t.Errorf("RKE2 데이터스토어: %+v", ds)
+	}
+	run.out["rke2 etcd-snapshot save"] = "Snapshot k3stui-etcd-node1-1791 saved."
+	if _, err := s.Backup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !run.called("rke2 etcd-snapshot save --data-dir " + dataDir) {
+		t.Errorf("스냅샷 명령: %v", run.calls)
+	}
+	if g := s.RestoreGuide("snap.db"); !strings.Contains(g, "rke2 server --cluster-reset") || !strings.Contains(g, "systemctl stop rke2-server") {
+		t.Errorf("RKE2 복원 안내:\n%s", g)
+	}
+	// 노드 추가: 9345 포트와 config.yaml 방식
+	os.WriteFile(filepath.Join(dataDir, "server", "token"), []byte("K10rke2token::server:x\n"), 0o600)
+	cmd, err := s.JoinCommand(context.Background(), "10.0.0.9")
+	if err != nil || !strings.Contains(cmd, "server: https://10.0.0.9:9345") || !strings.Contains(cmd, "token: K10rke2token") ||
+		!strings.Contains(cmd, `INSTALL_RKE2_TYPE="agent"`) || !strings.Contains(cmd, "rke2-agent") {
+		t.Errorf("RKE2 노드 추가 명령: %v\n%s", err, cmd)
+	}
+	// 인증서 갱신은 서비스 중지 → rke2 certificate rotate → 시작
+	run.calls = nil
+	if err := s.RotateCertificates(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"systemctl stop rke2-server", "rke2 certificate rotate", "systemctl start rke2-server"}
+	for i, w := range want {
+		if i >= len(run.calls) || !strings.HasPrefix(run.calls[i], w) {
+			t.Errorf("%d번째 호출 = %v, want %s", i, run.calls, w)
+		}
+	}
+}
+
+func TestK3sKubectlAndCrictl(t *testing.T) {
+	s, _, _ := testHost(t)
+	if got := strings.Join(s.KubectlCommand(), " "); got != "/usr/local/bin/k3s kubectl" {
+		t.Errorf("K3S kubectl: %s", got)
+	}
+	if got := strings.Join(s.CrictlCommand(), " "); got != "/usr/local/bin/k3s crictl" {
+		t.Errorf("K3S crictl: %s", got)
 	}
 }

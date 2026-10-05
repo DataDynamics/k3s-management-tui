@@ -3,15 +3,16 @@
 # 탐색 순서: --config → $K3STUI_CONF → <설치 경로>/conf/k3stui.yaml → /etc/k3stui/k3stui.yaml
 
 cluster:
-  # 배포판: auto | k3s | rke2 | kubeadm | eks | gke | kubernetes
-  # auto는 API 서버 버전(+k3s, +rke2, -eks-, -gke.)과 kubeadm-config ConfigMap으로 판별합니다.
+  # 배포판: auto | k3s | rke2 | kubeadm | kubernetes
+  #   k3s·rke2·kubeadm은 노드 관리(Host 탭)까지, kubernetes는 리소스 관리만 지원합니다.
+  #   auto는 API 서버 버전(+k3s, +rke2)과 kubeadm-config ConfigMap으로 판별하고, 그 밖(EKS·GKE·AKS 등)은 kubernetes로 봅니다.
   distribution: auto
   # 비우면 --kubeconfig → $KUBECONFIG → ~/.kube/config → /etc/rancher/k3s/k3s.yaml
   #        → /etc/rancher/rke2/rke2.yaml → /etc/kubernetes/admin.conf 순서로 쓸 수 있는 파일을 찾습니다.
   kubeconfig: ""
   context: ""                       # 비우면 kubeconfig의 current-context (--context로도 지정 가능)
   # Host 탭(서비스 제어·설정 편집·백업 등): auto | enabled | disabled
-  # auto는 K3S 또는 kubeadm 노드이고 API 서버가 이 호스트에 있을 때만 켭니다.
+  # auto는 K3S·RKE2·kubeadm 노드이고 API 서버가 이 호스트에 있을 때만 켭니다.
   host_management: auto
 
 # 아래 k3s 항목은 K3S 노드의 Host 탭에서만 씁니다.
@@ -20,6 +21,14 @@ k3s:
   service_name: k3s                 # agent 노드면 k3s-agent
   binary: /usr/local/bin/k3s
   data_dir: auto                    # auto = config.yaml의 data-dir 사용, 없으면 /var/lib/rancher/k3s
+
+# 아래 rke2 항목은 RKE2 노드의 Host 탭에서만 씁니다. 표준 설치라면 바꿀 필요가 없습니다.
+rke2:
+  service_name: auto                # auto | rke2-server | rke2-agent (auto는 실행 중인 유닛을 고릅니다)
+  config_file: /etc/rancher/rke2/config.yaml
+  binary: auto                      # auto는 /usr/local/bin/rke2 → /usr/bin/rke2 → /opt/rke2/bin/rke2 순으로 찾습니다
+  data_dir: auto                    # auto = config.yaml의 data-dir, 없으면 /var/lib/rancher/rke2
+                                    # kubectl·crictl은 <data-dir>/bin에 있는 것을 씁니다
 
 # 아래 kubeadm 항목은 kubeadm 노드의 Host 탭에서만 씁니다. 표준 설치라면 바꿀 필요가 없습니다.
 kubeadm:
@@ -47,7 +56,7 @@ safety:
   protected_namespaces: [kube-system, kube-public, kube-node-lease]
 
 backup:
-  # 데이터스토어 백업 위치 (K3S: SQLite·etcd, kubeadm: etcd 스냅샷 + PKI 압축본).
+  # 데이터스토어 백업 위치 (K3S: SQLite·etcd, RKE2: etcd, kubeadm: etcd 스냅샷 + PKI 압축본).
   # config/, manifests/ 하위 디렉터리에는 설정·static Pod 편집 전 백업도 저장합니다.
   # kubeadm에서는 /etc/kubernetes/manifests 안을 지정하면 안 됩니다 (kubelet이 백업을 Pod로 띄웁니다).
   dir: /data2/k3stui-backups

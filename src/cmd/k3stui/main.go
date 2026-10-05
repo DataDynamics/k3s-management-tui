@@ -45,7 +45,7 @@ func run() error {
 		confPath   = flag.String("config", "", "설정 파일 경로 (기본: 탐색 순서에 따름)")
 		kubeconfig = flag.String("kubeconfig", "", "kubeconfig 경로 (기본: $KUBECONFIG → ~/.kube/config → K3S·RKE2·kubeadm 기본 경로)")
 		kubeCtx    = flag.String("context", "", "사용할 kubeconfig context (기본: current-context)")
-		distro     = flag.String("distribution", "", "배포판 지정 (auto, k3s, rke2, kubeadm, eks, gke, kubernetes)")
+		distro     = flag.String("distribution", "", "배포판 지정 (auto, k3s, rke2, kubeadm, kubernetes)")
 		readOnly   = flag.Bool("read-only", false, "모든 변경 작업 비활성화")
 		namespace  = flag.String("n", "", "시작 네임스페이스 (all = 전체)")
 		view       = flag.String("view", "", "시작 탭 (dashboard, workloads, network, storage, config, host, helm)")
@@ -157,6 +157,8 @@ func decideHost(env *views.Env) {
 	}
 	env.LocalAPI = kube.IsLocalServer(server)
 	_, k3sErr := os.Stat(cfg.K3s.Binary)
+	rke2Bin := cfg.ResolveRKE2Binary()
+	_, rke2Err := os.Stat(rke2Bin)
 	kubeadmNode := fileExists(filepath.Join(cfg.Kubeadm.KubernetesDir, "manifests", "kube-apiserver.yaml")) ||
 		fileExists(cfg.Kubeadm.KubeletConfig)
 
@@ -168,6 +170,8 @@ func decideHost(env *views.Env) {
 		// API 서버가 응답하지 않아도(k3s·kubelet 중지 등) 로컬 노드면 서비스를 다시 띄울 수 있어야 합니다.
 		case env.LocalAPI && k3sErr == nil:
 			env.Distro = config.DistroK3s
+		case env.LocalAPI && rke2Err == nil:
+			env.Distro = config.DistroRKE2
 		case env.LocalAPI && kubeadmNode:
 			env.Distro = config.DistroKubeadm
 		default:
@@ -180,6 +184,8 @@ func decideHost(env *views.Env) {
 	switch env.Distro {
 	case config.DistroK3s:
 		h = k3s.NewSystem(cfg, runner)
+	case config.DistroRKE2:
+		h = k3s.NewRKE2System(cfg, runner)
 	case config.DistroKubeadm:
 		h = kubeadm.NewSystem(cfg, runner)
 	}
@@ -188,13 +194,15 @@ func decideHost(env *views.Env) {
 	case cfg.Cluster.HostManagement == config.HostDisabled:
 		env.HostReason = "설정에서 끔 (cluster.host_management: disabled)"
 	case h == nil:
-		env.HostReason = kube.DistroName(env.Distro) + " 클러스터는 호스트 관리를 지원하지 않습니다 (K3S, kubeadm만 지원)"
+		env.HostReason = kube.DistroName(env.Distro) + " 클러스터는 호스트 관리를 지원하지 않습니다 (K3S, RKE2, kubeadm만 지원)"
 	case cfg.Cluster.HostManagement == config.HostEnabled:
 		env.HostEnabled = true
 	case !env.LocalAPI:
 		env.HostReason = "API 서버가 원격에 있습니다 (" + server + ")"
 	case env.Distro == config.DistroK3s && k3sErr != nil:
 		env.HostReason = "k3s 바이너리가 없습니다 (" + cfg.K3s.Binary + ")"
+	case env.Distro == config.DistroRKE2 && rke2Err != nil:
+		env.HostReason = "rke2 바이너리가 없습니다 (" + strings.Join(config.RKE2BinaryCandidates, ", ") + ")"
 	case env.Distro == config.DistroKubeadm && !kubeadmNode:
 		env.HostReason = "kubeadm 노드 파일이 없습니다 (" + cfg.Kubeadm.KubernetesDir + "/manifests, " + cfg.Kubeadm.KubeletConfig + ")"
 	default:
@@ -203,6 +211,10 @@ func decideHost(env *views.Env) {
 	if env.HostEnabled {
 		env.Host = h
 		env.Crictl = &runtime.Crictl{Command: h.CrictlCommand(), Run: runner}
+	}
+	// 로컬 노드면 Host 탭을 끈 경우에도 노드의 kubectl을 씁니다 (RKE2는 PATH에 kubectl이 없는 경우가 많습니다).
+	if h != nil && env.LocalAPI {
+		env.KubectlBase = h.KubectlCommand()
 	}
 	if env.Kube != nil && env.LocalAPI {
 		env.LocalPath = env.Kube.HasProvisioner(contextBG(), "rancher.io/local-path")
@@ -349,7 +361,7 @@ func runCheck(env *views.Env) error {
 	} else {
 		fmt.Printf("[%s] helm            %v\n", ok(false), err)
 	}
-	kc := cfg.KubectlCommand(env.LocalK3s())
+	kc := cfg.KubectlCommand(env.KubectlBase)
 	fmt.Printf("[%s] kubectl         %s\n", ok(true), strings.Join(kc, " "))
 	editor := cfg.EditorCommand()
 	_, edErr := exec.LookPath(editor[0])

@@ -314,7 +314,7 @@ K3S가 아닌 클러스터에서도 리소스 관리 도구로 쓸 수 있게, �
    사용자가 지정한 경로는 그대로 쓰고, 자동 탐색 후보는 context와 API 서버 주소가 있는지 확인한 뒤 씁니다.
    이 서버처럼 내용이 빈 `~/.kube/config`가 있어도 건너뜁니다.
 2. **context**: `--context` 또는 `cluster.context`. 비우면 current-context를 씁니다. kubectl에는 `--context`, helm에는 `--kube-context`로 넘깁니다.
-3. **배포판**: `cluster.distribution`이 `auto`면 API 서버 버전(`+k3s`, `+rke2`, `-eks-`, `-gke.`)으로 판별하고,
+3. **배포판**: `cluster.distribution`이 `auto`면 API 서버 버전(`+k3s`, `+rke2`)으로 판별하고,
    알 수 없으면 `kube-system/kubeadm-config` ConfigMap으로 kubeadm을 확인합니다. 그 밖에는 `kubernetes`입니다.
    API 서버가 응답하지 않아도(k3s 중지 등) 로컬 서버이고 k3s 바이너리가 있으면 K3S로 봅니다. 그래야 Host 탭에서 서비스를 다시 띄울 수 있습니다.
 4. **로컬 여부**: API 서버 주소가 루프백이거나 이 호스트의 인터페이스 IP이면 로컬로 봅니다.
@@ -339,7 +339,7 @@ K3S가 아닌 클러스터에서도 리소스 관리 도구로 쓸 수 있게, �
 - 이 서버에서 확인: `KUBECONFIG` 없이 실행하면 빈 `~/.kube/config`를 건너뛰고 K3S kubeconfig를 고릅니다.
   `--distribution kubernetes`, `cluster.host_management: disabled`, context가 두 개인 kubeconfig에서 `--context`로 고르기를 확인했습니다.
   원격 모드 TUI에서 describe(PATH kubectl + context)와 Helm 목록(`--kube-context`)이 동작하는 것도 확인했습니다.
-- 실제 kubeadm, EKS, GKE 클러스터에서는 아직 확인하지 않았습니다. 이 서버에는 K3S만 있습니다.
+- 관리형 클러스터(EKS, GKE 등)에서는 확인하지 않았습니다 (kubeadm·RKE2는 14·15장 참고).
 
 ### 13.4 다음 단계 (2단계)
 
@@ -405,5 +405,48 @@ internal/kubeadm   kubeadm 구현 (새로 작성)
 
 ### 14.4 남은 범위
 
-- RKE2 노드 관리 (K3S와 구조가 비슷해 경로만 바꾼 변형으로 붙일 수 있습니다).
+- RKE2 노드 관리 → 15장에서 구현했습니다.
 - 여러 컨트롤 플레인 노드의 etcd 일괄 백업, 원격 노드 관리 (SSH·에이전트 필요, 비목표).
+
+## 15. RKE2 노드 관리와 배포판 정리 (2026-10-06)
+
+### 15.1 배포판 값 정리
+
+`cluster.distribution`은 `auto | k3s | rke2 | kubeadm | kubernetes`입니다.
+구현 없이 이름만 판별하던 `eks`, `gke`는 없앴습니다. 관리형 클러스터는 `kubernetes`(리소스 관리 모드)로 동작하며,
+설정에 `eks`·`gke`를 적으면 `kubernetes` 또는 `auto`를 쓰라는 오류를 냅니다.
+
+| 값 | 노드 관리 | 판별 |
+|---|---|---|
+| `k3s` | 지원 | 버전 `+k3s` 또는 로컬 k3s 바이너리 |
+| `rke2` | 지원 | 버전 `+rke2` 또는 로컬 rke2 바이너리 |
+| `kubeadm` | 지원 | `kube-system/kubeadm-config` 또는 로컬 `/etc/kubernetes/manifests` |
+| `kubernetes` | 없음 (리소스 관리만) | 그 밖의 모든 클러스터 |
+
+### 15.2 RKE2 구현
+
+RKE2는 K3S와 구조가 같으므로 `internal/k3s`에 flavor(배포판별 차이)를 두고 같은 구현을 씁니다.
+
+| 차이 | K3S | RKE2 |
+|---|---|---|
+| 실행 파일 | `k3s.binary` | `/usr/local/bin/rke2` → `/usr/bin/rke2` → `/opt/rke2/bin/rke2` (auto) |
+| 서비스 | `k3s` | `rke2-server` / `rke2-agent` (auto: 실행 중인 유닛 → 설치된 유닛) |
+| 설정 | `/etc/rancher/k3s/config.yaml` | `/etc/rancher/rke2/config.yaml` |
+| data-dir 기본값 | `/var/lib/rancher/k3s` | `/var/lib/rancher/rke2` |
+| kubectl | `k3s kubectl` | `<data-dir>/bin/kubectl` (PATH에 없는 경우가 많음) |
+| crictl | `k3s crictl` | `<data-dir>/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock` |
+| 데이터스토어 | SQLite 또는 etcd | etcd |
+| check-config | 있음 | 없음 |
+| 노드 추가 | `curl get.k3s.io \| K3S_URL=…:6443 K3S_TOKEN=…` | get.rke2.io agent 설치 + `config.yaml`(`server: …:9345`, `token`) + `rke2-agent` 시작 |
+
+- Host 인터페이스에 `KubectlCommand()`를 추가했습니다. 로컬 노드면 Host 탭을 끈 경우에도 노드의 kubectl을 씁니다.
+- 노드 추가 명령의 서버 IP는 control-plane 라벨 노드 → 이 호스트와 이름이 같은 노드 → 첫 노드 순으로 고릅니다 (RKE2는 Ready 전에는 라벨이 없음).
+
+### 15.3 검증
+
+- 단위 테스트: RKE2 서비스 자동 선택, kubectl·crictl 경로, check-config 미지원, etcd 판별(state.db가 있어도 SQLite로 보지 않음), 스냅샷 명령, 복원 안내, 노드 추가 절차, 인증서 갱신 순서, `eks`·`gke` 설정 거부.
+- 실제 RKE2 (v1.36.5+rke2r1, 일회용 systemd 컨테이너에 공식 설치 스크립트로 설치한 뒤 삭제):
+  배포판·서비스·kubeconfig·kubectl·crictl·etcd 판별, 모든 Host 하위 탭 데이터, etcd 스냅샷(`rke2 etcd-snapshot ls`에 등록 확인),
+  manifest `.skip` 전환·해제, config.yaml 편집과 `rke2-server` 재시작, 인증서 갱신(serving-kube-apiserver 시리얼 변경), 노드 추가 절차, 복원 안내,
+  `<data-dir>/bin/kubectl`로 describe를 확인했습니다.
+- 검증 중 고친 문제: skip 확인 문구가 RKE2에서도 "K3S"로 나오던 문제, Ready 전 RKE2 노드에서 노드 추가 명령의 서버 IP가 비던 문제.

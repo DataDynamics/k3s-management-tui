@@ -1,5 +1,5 @@
 // Package host는 노드(호스트) 관리 기능의 공통 인터페이스와 타입입니다.
-// 배포판별 구현은 internal/k3s, internal/kubeadm에 있습니다.
+// 배포판별 구현은 internal/k3s(K3S, RKE2), internal/kubeadm에 있습니다.
 package host
 
 import (
@@ -52,7 +52,7 @@ type Capabilities struct {
 
 // Host는 노드 관리 인터페이스입니다 (설계 7.3, 13장). 테스트에서는 가짜 구현을 주입합니다.
 type Host interface {
-	Distro() string // config.DistroK3s, config.DistroKubeadm
+	Distro() string // config.DistroK3s, config.DistroRKE2, config.DistroKubeadm
 	Caps() Capabilities
 	IsRoot() bool
 	ServiceName() string
@@ -90,6 +90,9 @@ type Host interface {
 	ReadFile(path string) (string, error)
 	// CrictlCommand는 crictl 실행 명령 앞부분입니다 (예: [k3s crictl], [crictl --runtime-endpoint ...]).
 	CrictlCommand() []string
+	// KubectlCommand는 노드에 들어 있는 kubectl 명령입니다 (K3S: [k3s kubectl], RKE2: [<data-dir>/bin/kubectl]).
+	// nil이면 PATH의 kubectl을 씁니다.
+	KubectlCommand() []string
 }
 
 // DatastoreKind는 클러스터 데이터스토어 종류입니다.

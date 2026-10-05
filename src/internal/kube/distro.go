@@ -15,17 +15,15 @@ import (
 // DistroFromVersion은 API 서버 버전 문자열로 배포판을 추정합니다.
 // 버전만으로 알 수 없으면 ""를 돌려줍니다.
 //
-//	v1.36.5+k3s1 → k3s, v1.30.4+rke2r1 → rke2, v1.29.1-eks-b9c9ed7 → eks, v1.29.1-gke.1589000 → gke
+//	v1.36.5+k3s1 → k3s, v1.30.4+rke2r1 → rke2
+//
+// 관리형 클러스터(EKS, GKE, AKS 등)는 따로 구분하지 않고 kubernetes로 봅니다.
 func DistroFromVersion(v string) string {
 	switch {
 	case strings.Contains(v, "+k3s"):
 		return config.DistroK3s
 	case strings.Contains(v, "+rke2"):
 		return config.DistroRKE2
-	case strings.Contains(v, "-eks-"):
-		return config.DistroEKS
-	case strings.Contains(v, "-gke."):
-		return config.DistroGKE
 	}
 	return ""
 }
@@ -53,10 +51,6 @@ func DistroName(d string) string {
 		return "RKE2"
 	case config.DistroKubeadm:
 		return "kubeadm"
-	case config.DistroEKS:
-		return "EKS"
-	case config.DistroGKE:
-		return "GKE"
 	}
 	return "Kubernetes"
 }

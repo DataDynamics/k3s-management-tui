@@ -29,7 +29,7 @@ func (s *System) Datastore() host.DatastoreInfo {
 		return host.DatastoreInfo{Kind: host.DatastoreEtcd, Path: filepath.Join(dbDir, "etcd")}
 	}
 	db := filepath.Join(dbDir, "state.db")
-	if st, err := os.Stat(db); err == nil {
+	if st, err := os.Stat(db); err == nil && s.fl.sqlite {
 		size := st.Size()
 		if w, err := os.Stat(db + "-wal"); err == nil {
 			size += w.Size()
@@ -86,7 +86,7 @@ func (s *System) Backup(ctx context.Context) (string, error) {
 		}
 	case host.DatastoreEtcd:
 		name := etcdPrefix
-		out, err := s.k3s(ctx, "etcd-snapshot", "save", "--data-dir", s.DataDir(), "--dir", dir, "--name", name)
+		out, err := s.cli(ctx, "etcd-snapshot", "save", "--data-dir", s.DataDir(), "--dir", dir, "--name", name)
 		if err != nil {
 			return "", err
 		}
@@ -195,8 +195,8 @@ func (s *System) DeleteBackup(ctx context.Context, name string) error {
 	}
 	p := filepath.Join(s.cfg.Backup.Dir, name)
 	if strings.HasPrefix(name, etcdPrefix) {
-		// etcd 스냅샷은 K3S가 기록(ConfigMap)도 관리하므로 k3s 명령으로 지웁니다.
-		if _, err := s.k3s(ctx, "etcd-snapshot", "delete", "--data-dir", s.DataDir(), "--dir", s.cfg.Backup.Dir, name); err == nil {
+		// etcd 스냅샷은 K3S·RKE2가 기록(ConfigMap)도 관리하므로 k3s·rke2 명령으로 지웁니다.
+		if _, err := s.cli(ctx, "etcd-snapshot", "delete", "--data-dir", s.DataDir(), "--dir", s.cfg.Backup.Dir, name); err == nil {
 			return nil
 		}
 	}
@@ -210,13 +210,14 @@ func (s *System) DeleteBackup(ctx context.Context, name string) error {
 // RestoreGuide는 자동 복원을 지원하지 않는 경우(etcd)의 수동 복원 절차입니다.
 func (s *System) RestoreGuide(name string) string {
 	p := filepath.Join(s.cfg.Backup.Dir, name)
-	return "K3S embedded etcd 스냅샷 복원 절차 (모든 서버 노드에 영향이 있습니다)\n\n" +
-		"1. 모든 서버 노드에서 k3s를 중지합니다:  systemctl stop k3s\n" +
+	c, svc := s.fl.cmd, s.fl.service
+	return s.fl.name + " embedded etcd 스냅샷 복원 절차 (모든 서버 노드에 영향이 있습니다)\n\n" +
+		"1. 모든 서버 노드에서 서비스를 중지합니다:  systemctl stop " + svc + "\n" +
 		"2. 첫 번째 서버에서 클러스터를 스냅샷으로 초기화합니다:\n" +
-		"   k3s server --cluster-reset --cluster-reset-restore-path=" + p + " --data-dir " + s.DataDir() + "\n" +
-		"3. 완료 메시지가 나오면 k3s를 시작합니다:  systemctl start k3s\n" +
-		"4. 나머지 서버 노드는 " + s.DataDir() + "/server/db 를 지운 뒤 k3s를 시작해 다시 합류시킵니다.\n\n" +
-		"자세한 내용: https://docs.k3s.io/datastore/backup-restore\n"
+		"   " + c + " server --cluster-reset --cluster-reset-restore-path=" + p + " --data-dir " + s.DataDir() + "\n" +
+		"3. 완료 메시지가 나오면 서비스를 시작합니다:  systemctl start " + svc + "\n" +
+		"4. 나머지 서버 노드는 " + s.DataDir() + "/server/db 를 지운 뒤 서비스를 시작해 다시 합류시킵니다.\n\n" +
+		"자세한 내용: " + s.fl.docsURL + "\n"
 }
 
 // RestoreBackup은 SQLite 백업으로 데이터스토어를 되돌립니다.
@@ -245,12 +246,12 @@ func (s *System) RestoreBackup(ctx context.Context, name string, progress func(s
 			return fmt.Errorf("백업 시점의 서버 토큰이 현재 토큰과 다릅니다. 토큰을 먼저 맞춘 뒤 복원하세요 (%s.token)", src)
 		}
 	}
-	progress("k3s 서비스 중지")
+	progress(s.fl.service + " 서비스 중지")
 	if err := s.ServiceControl(ctx, host.OpStop); err != nil {
 		return err
 	}
 	restart := func() error {
-		progress("k3s 서비스 시작")
+		progress(s.fl.service + " 서비스 시작")
 		return s.ServiceControl(ctx, host.OpStart)
 	}
 	stamp := s.now().Format("20060102-150405")

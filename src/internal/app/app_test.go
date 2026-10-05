@@ -112,6 +112,7 @@ func (f *fakeHost) JoinCommand(context.Context, string) (string, error) {
 func (f *fakeHost) DiskUsage() []host.DiskInfo      { return nil }
 func (f *fakeHost) ReadFile(string) (string, error) { return "data-dir: /data2/k3s\n", nil }
 func (f *fakeHost) CrictlCommand() []string         { return []string{"crictl"} }
+func (f *fakeHost) KubectlCommand() []string        { return nil }
 
 func newTestModel(t *testing.T, root bool) (*Model, *fakeHost, *bytes.Buffer) {
 	t.Helper()
@@ -442,7 +443,7 @@ func TestCommandModeAndQuit(t *testing.T) {
 
 func TestRemoteClusterHidesHostFeatures(t *testing.T) {
 	m, fh, _ := newTestModelWith(t, true, func(env *views.Env) {
-		env.Distro, env.LocalAPI, env.HostEnabled = "eks", false, false
+		env.Distro, env.LocalAPI, env.HostEnabled = "kubernetes", false, false
 		env.HostReason = "API 서버가 원격에 있습니다 (https://example.eks.amazonaws.com)"
 		env.Cfg.Cluster.Kubeconfig, env.Cfg.Cluster.KubeconfigSource = "/home/u/.kube/config", "~/.kube/config"
 	})
@@ -457,7 +458,7 @@ func TestRemoteClusterHidesHostFeatures(t *testing.T) {
 		t.Errorf("탭 순서: %v", names)
 	}
 	out := m.render()
-	for _, want := range []string{"EKS", "연결 정보", "API 서버가 원격에 있습니다", "6 Helm"} {
+	for _, want := range []string{"Kubernetes", "연결 정보", "API 서버가 원격에 있습니다", "6 Helm"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("화면에 %q가 없음:\n%s", want, out)
 		}

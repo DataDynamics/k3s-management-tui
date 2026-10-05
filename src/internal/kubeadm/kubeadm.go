@@ -163,6 +163,9 @@ func (s *System) crictl(ctx context.Context, args ...string) ([]byte, error) {
 	return s.run.Run(ctx, cmd[0], append(cmd[1:], args...)...)
 }
 
+// KubectlCommand는 nil입니다. kubeadm 노드는 PATH의 kubectl을 씁니다.
+func (s *System) KubectlCommand() []string { return nil }
+
 // ---- 서비스 ----
 
 func (s *System) ServiceStatus(ctx context.Context) (host.ServiceStatus, error) {

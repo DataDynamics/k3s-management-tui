@@ -77,7 +77,7 @@ for arch in "${ARCH_LIST[@]}"; do
     install -m 0755 "$bin" "$stage/$name/libexec/k3stui"
     install -m 0755 "$BASE/bin/k3stui" "$BASE/bin/install.sh" "$stage/$name/bin/"
     cp -r "$BASE/conf" "$stage/$name/conf"
-    cp "$BASE/README.md" "$stage/$name/"
+    cp "$BASE/README.md" "$BASE/LICENSE" "$stage/$name/"
     tar -C "$stage" --owner=0 --group=0 -czf "$OUT/$name.tar.gz" "$name"
     rm -rf "$stage"
     # 압축을 풀지 않고 바로 받아 쓸 수 있는 실행 파일 (정적 바이너리)

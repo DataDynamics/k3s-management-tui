@@ -14,6 +14,7 @@ priority: optional
 maintainer: DataDynamics <fharenheit@gmail.com>
 vendor: DataDynamics
 homepage: https://github.com/DataDynamics/k3s-management-tui
+license: Apache-2.0
 description: |-
   K3s & K8s Management TUI.
   Kubernetes 리소스와 K3s·RKE2·kubeadm 노드를 터미널 하나에서 관리합니다.
@@ -51,6 +52,8 @@ contents:
     type: tree
   - src: README.md
     dst: /opt/k3stui/README.md
+  - src: LICENSE
+    dst: /opt/k3stui/LICENSE
 
   # 로그·감사 로그 디렉터리
   - dst: /var/log/k3stui

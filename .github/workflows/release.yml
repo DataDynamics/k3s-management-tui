@@ -1,0 +1,49 @@
+# k3stui 릴리스 — 설계: docs/CI-DESIGN.md 4.6
+# v* 태그를 푸시하면 ci.yml과 같은 빌드·설치 검증·통합 테스트를 거친 뒤 GitHub Release에 산출물을 올립니다.
+#   v1.2.0       → 정식 릴리스
+#   v1.2.0-rc.1  → 시험 릴리스 (prerelease로 표시)
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    with:
+      e2e: true
+
+  release:
+    name: GitHub Release
+    needs: ci
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Release 생성
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dist-*
+          path: artifacts
+      - name: 릴리스 파일 모으기
+        run: |
+          mkdir release
+          # 압축본과 deb는 정적 바이너리라 Ubuntu 버전과 무관하므로 ubuntu-24.04 산출물을 씁니다
+          cp artifacts/dist-ubuntu-24.04/*.tar.gz artifacts/dist-ubuntu-24.04/*.deb release/
+          # rpm은 배포판별(el8·el9·el10)로 올립니다
+          cp artifacts/dist-rhel-8/*.rpm artifacts/dist-rhel-9/*.rpm artifacts/dist-rhel-10/*.rpm release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+          ls -l release
+          # 빌드에 쓴 버전이 태그와 같은지 확인합니다 (태그가 아닌 커밋으로 빌드되는 것을 막습니다)
+          test "$(cat artifacts/dist-ubuntu-24.04/VERSION)" = "$GITHUB_REF_NAME"
+      - name: Release 생성
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=""
+          case "$TAG" in *-*) flags="--prerelease" ;; esac
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --title "k3stui $TAG" --generate-notes $flags

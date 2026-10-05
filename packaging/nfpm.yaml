@@ -1,0 +1,58 @@
+# k3stui 패키지 정의 (nfpm). bin/package.sh가 환경변수를 채워 .deb·.rpm을 만듭니다.
+#   PKG_VERSION  패키지 버전 (예: 1.2.0, 1.2.0+3.gabc1234, 0.0.0~git20261006.abc1234)
+#   PKG_RELEASE  rpm 릴리스 (예: 1.el9). deb에서는 쓰지 않습니다
+#   PKG_ARCH     Go 아키텍처 이름 (amd64, arm64). nfpm이 deb·rpm 이름(x86_64, aarch64)으로 바꿉니다
+# 실행 파일은 bin/package.sh가 아키텍처별로 build/pkg/k3stui에 복사해 둡니다 (contents 경로는 환경변수를 펼치지 않습니다).
+name: k3stui
+arch: ${PKG_ARCH}
+platform: linux
+version: ${PKG_VERSION}
+version_schema: none        # git 기반 버전(~, +)을 그대로 씁니다
+release: ${PKG_RELEASE}
+section: admin
+priority: optional
+maintainer: DataDynamics <fharenheit@gmail.com>
+vendor: DataDynamics
+homepage: https://github.com/DataDynamics/k3s-management-tui
+description: |-
+  K3s & K8s Management TUI.
+  Kubernetes 리소스와 K3s·RKE2·kubeadm 노드를 터미널 하나에서 관리합니다.
+
+contents:
+  # 실행 파일과 런처 (bin/install.sh와 같은 배치)
+  - src: build/pkg/k3stui
+    dst: /opt/k3stui/libexec/k3stui
+    file_info: { mode: 0755 }
+  - src: bin/k3stui
+    dst: /opt/k3stui/bin/k3stui
+    file_info: { mode: 0755 }
+  - src: /opt/k3stui/bin/k3stui
+    dst: /usr/local/bin/k3stui
+    type: symlink
+
+  # 설정 파일: 업그레이드해도 사용자가 고친 내용을 덮어쓰지 않습니다
+  # (rpm은 새 기본값을 .rpmnew로, deb는 dpkg 규칙에 따라 기존 파일을 유지합니다)
+  - src: conf/k3stui.yaml
+    dst: /opt/k3stui/conf/k3stui.yaml
+    type: config|noreplace
+  - src: conf/keybindings.yaml
+    dst: /opt/k3stui/conf/keybindings.yaml
+    type: config|noreplace
+  - src: conf/theme.yaml
+    dst: /opt/k3stui/conf/theme.yaml
+    type: config|noreplace
+
+  # 예제와 문서 (업그레이드 시 새 내용으로 바꿉니다)
+  - src: conf/views.d/
+    dst: /opt/k3stui/conf/views.d
+    type: tree
+  - src: conf/examples/
+    dst: /opt/k3stui/conf/examples
+    type: tree
+  - src: README.md
+    dst: /opt/k3stui/README.md
+
+  # 로그·감사 로그 디렉터리
+  - dst: /var/log/k3stui
+    type: dir
+    file_info: { mode: 0750 }

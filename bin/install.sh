@@ -29,10 +29,18 @@ if [[ $UNINSTALL -eq 1 ]]; then
   exit 0
 fi
 
-[[ -x "$BASE/build/k3stui" ]] || "$BASE/bin/build.sh"
+# 실행 파일: 배포용 압축본(libexec/) → 저장소 빌드본(build/) → 없으면 빌드
+SRC_BIN=""
+for c in "$BASE/libexec/k3stui" "$BASE/build/k3stui"; do
+  if [[ -x "$c" ]]; then SRC_BIN="$c"; break; fi
+done
+if [[ -z "$SRC_BIN" ]]; then
+  "$BASE/bin/build.sh"
+  SRC_BIN="$BASE/build/k3stui"
+fi
 
 install -d -m 0755 "$PREFIX/bin" "$PREFIX/libexec" "$PREFIX/conf" "$PREFIX/conf/views.d"
-install -m 0755 "$BASE/build/k3stui" "$PREFIX/libexec/k3stui"
+install -m 0755 "$SRC_BIN" "$PREFIX/libexec/k3stui"
 install -m 0755 "$BASE/bin/k3stui" "$PREFIX/bin/k3stui"
 
 # 설정: 사용자가 고친 파일을 보존합니다.

@@ -427,7 +427,9 @@ tools:
 ## 디렉터리 구조
 
 ```
-bin/            런처(k3stui), build.sh, install.sh
+bin/            런처(k3stui), build.sh, install.sh, package.sh
+packaging/      nfpm.yaml(deb·rpm 정의), test-install.sh(설치 검증)
+.github/        GitHub Actions 워크플로 (ci.yml, release.yml)
 conf/           k3stui.yaml, keybindings.yaml, theme.yaml, views.d/
 src/            Go 모듈
   cmd/k3stui/   진입점 (옵션 처리, --check, --dump)
@@ -460,6 +462,30 @@ cd src && go test -tags e2e ./internal/kube/ -v       # 실제 K3S 대상 통합
 
 새 리소스 화면은 `src/internal/kube/registry.go`에 `ResourceDef`를 하나 추가하고, `src/internal/ui/views/tabs.go`의 탭에 키를 넣으면 됩니다.
 새 작업은 `views.Action`으로 정의합니다. 읽기 전용 확인, 확인 다이얼로그, 감사 기록은 앱이 공통으로 처리합니다.
+
+## 빌드와 배포 (CI)
+
+GitHub Actions가 Ubuntu 22.04·24.04·26.04와 RHEL 8·9·10(UBI)에서 각각 빌드·테스트하고 패키지를 만듭니다. 설계는 [docs/CI-DESIGN.md](docs/CI-DESIGN.md)에 있습니다.
+
+| 워크플로 | 실행 시점 | 내용 |
+|---|---|---|
+| `ci` | PR, main 푸시, 수동 실행 | gofmt·vet·테스트 → 배포판 6개 빌드·패키징 → 깨끗한 컨테이너에서 설치 검증 → (main) K3s·kubeadm 통합 테스트 |
+| `release` | `v*` 태그 푸시 | `ci`와 같은 검증 후 GitHub Release에 tar.gz·deb·rpm·SHA256SUMS 업로드 (`v1.0.0-rc.1`처럼 `-`가 있으면 prerelease) |
+
+로컬에서도 같은 스크립트로 패키지를 만들고 검증할 수 있습니다.
+
+```bash
+bin/package.sh --tar --deb --rpm el9            # dist/에 tar.gz, deb, rpm (amd64·arm64)
+docker run --rm -v $PWD/dist:/dist -v $PWD/packaging/test-install.sh:/t.sh \
+  registry.access.redhat.com/ubi9/ubi bash /t.sh /dist   # 깨끗한 RHEL 9에서 설치 검증
+```
+
+패키지로 설치하면 `bin/install.sh`와 같은 위치(`/opt/k3stui`, `/usr/local/bin/k3stui`)에 들어가며, 업그레이드해도 고친 설정 파일은 유지됩니다.
+
+```bash
+sudo dpkg -i k3stui_<버전>-1_amd64.deb                 # Ubuntu
+sudo dnf install ./k3stui-<버전>-1.el9.x86_64.rpm      # RHEL 9
+```
 
 ## 문제 해결
 

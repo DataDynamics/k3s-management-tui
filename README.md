@@ -1,6 +1,6 @@
-# K3S Management TUI (k3stui)
+# K3s & K8s Management TUI (k3stui)
 
-K3S 서버를 터미널 하나에서 관리하는 TUI입니다.
+K3s & K8s 서버를 터미널 하나에서 관리하는 TUI입니다.
 
 k9s처럼 Kubernetes 리소스를 다루는 기능에 더해, 일반 도구가 다루지 않는 **K3S 호스트 쪽 관리 기능**을 함께 제공합니다.
 systemd 서비스 제어, `config.yaml` 편집, 데이터스토어 백업·복원, 자동 배포 manifest, 인증서, containerd 이미지·컨테이너를 한 화면에서 관리할 수 있습니다.

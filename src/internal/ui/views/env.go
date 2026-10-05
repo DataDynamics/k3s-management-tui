@@ -10,7 +10,7 @@ import (
 	"github.com/DataDynamics/k3s-management-tui/internal/audit"
 	"github.com/DataDynamics/k3s-management-tui/internal/config"
 	"github.com/DataDynamics/k3s-management-tui/internal/helm"
-	"github.com/DataDynamics/k3s-management-tui/internal/k3s"
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 	"github.com/DataDynamics/k3s-management-tui/internal/kube"
 	"github.com/DataDynamics/k3s-management-tui/internal/runtime"
 	"github.com/DataDynamics/k3s-management-tui/internal/ui/components"
@@ -25,7 +25,7 @@ type Env struct {
 	KubeErr error
 	Store   *kube.Store
 	Metrics *kube.Metrics
-	Host    k3s.Host
+	Host    host.Host
 	Crictl  *runtime.Crictl
 	Helm    *helm.Client
 	PF      *kube.PortForwarder
@@ -57,12 +57,12 @@ type Env struct {
 
 // HostStatus는 주기적으로 갱신되는 호스트 상태 캐시입니다.
 type HostStatus struct {
-	Service   k3s.ServiceStatus
+	Service   host.ServiceStatus
 	Err       error
 	Version   string
-	Datastore k3s.DatastoreInfo
-	Disk      []k3s.DiskInfo
-	Certs     []k3s.CertInfo
+	Datastore host.DatastoreInfo
+	Disk      []host.DiskInfo
+	Certs     []host.CertInfo
 	Updated   time.Time
 }
 

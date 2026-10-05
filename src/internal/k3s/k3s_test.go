@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/DataDynamics/k3s-management-tui/internal/config"
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 )
 
 // fakeRunner는 실행된 명령을 기록하는 가짜 실행기입니다.
@@ -67,42 +68,10 @@ func testHost(t *testing.T) (*System, *fakeRunner, string) {
 	cfg.Backup.Keep = 2
 	run := &fakeRunner{out: map[string]string{}, err: map[string]error{}}
 	s := NewSystem(cfg, run)
-	s.ctl = run
+	s.sd.Ctl = run
+	s.sd.Root = true
 	s.root = true
 	return s, run, dataDir
-}
-
-func TestParseSystemctlShow(t *testing.T) {
-	out := "LoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=1234\n" +
-		"ActiveEnterTimestamp=@1791204607\nMemoryCurrent=4294967296\nTasksCurrent=211\nNRestarts=2\n"
-	st := ParseSystemctlShow("k3s", []byte(out))
-	if !st.Active() || st.MainPID != 1234 || st.MemoryBytes != 4294967296 || st.Tasks != 211 || st.Restarts != 2 {
-		t.Errorf("파싱 결과 이상: %+v", st)
-	}
-	if st.Since.Unix() != 1791204607 {
-		t.Errorf("시작 시각: %v", st.Since)
-	}
-	// 측정 불가 값([not set], uint64 max)은 -1/0으로 둡니다.
-	st = ParseSystemctlShow("k3s", []byte("ActiveState=failed\nMemoryCurrent=[not set]\nTasksCurrent=18446744073709551615\n"))
-	if st.Active() || st.MemoryBytes != -1 || st.Tasks != 0 {
-		t.Errorf("측정 불가 값 처리 이상: %+v", st)
-	}
-}
-
-func TestJournalLevel(t *testing.T) {
-	cases := map[string]string{
-		`Oct 05 k3s[1]: time="x" level=error msg="boom"`:              "error",
-		`Oct 05 k3s[1]: time="x" level=warning msg="hmm"`:             "warn",
-		`2026-10-05T22:22:16+09:00 host k3s[2211085]: E1005 22:22:16`: "error",
-		`2026-10-05T22:22:16+09:00 host k3s[2211085]: W1005 22:22:16`: "warn",
-		`2026-10-05T22:22:16+09:00 host k3s[2211085]: I1005 22:22:16`: "",
-		`short`: "",
-	}
-	for line, want := range cases {
-		if got := JournalLevel(line); got != want {
-			t.Errorf("JournalLevel(%q) = %q, want %q", line, got, want)
-		}
-	}
 }
 
 func TestLoadK3sConfigWithDropIns(t *testing.T) {
@@ -167,7 +136,7 @@ func TestWriteConfigBacksUpAndValidates(t *testing.T) {
 		t.Errorf("기존 권한이 유지되지 않음: %v", st.Mode())
 	}
 	s.root = false
-	if _, err := s.WriteConfig([]byte("a: 3\n")); err != ErrNotRoot {
+	if _, err := s.WriteConfig([]byte("a: 3\n")); err != host.ErrNotRoot {
 		t.Errorf("root가 아니면 ErrNotRoot여야 함: %v", err)
 	}
 }
@@ -221,7 +190,7 @@ func TestSQLiteBackupPruneAndRestore(t *testing.T) {
 	makeKineDB(t, dbPath, 5)
 	os.WriteFile(filepath.Join(dataDir, "server", "token"), []byte("K10abc::server:xyz\n"), 0o600)
 
-	if ds := s.Datastore(); ds.Kind != DatastoreSQLite || ds.Path != dbPath {
+	if ds := s.Datastore(); ds.Kind != host.DatastoreSQLite || ds.Path != dbPath {
 		t.Fatalf("데이터스토어 판별 실패: %+v", ds)
 	}
 
@@ -247,7 +216,7 @@ func TestSQLiteBackupPruneAndRestore(t *testing.T) {
 	if _, err := os.Stat(paths[0]); !os.IsNotExist(err) {
 		t.Error("가장 오래된 백업이 지워지지 않음")
 	}
-	if !list[0].HasToken {
+	if !list[0].HasExtra {
 		t.Error("백업과 함께 토큰이 저장되지 않음")
 	}
 	if err := CheckSQLite(context.Background(), list[0].Path); err != nil {
@@ -377,14 +346,15 @@ func TestRotateCertificatesStopsAndStarts(t *testing.T) {
 func TestServiceControlNeedsRoot(t *testing.T) {
 	s, run, _ := testHost(t)
 	s.root = false
-	if err := s.ServiceControl(context.Background(), OpRestart); err != ErrNotRoot {
+	s.sd.Root = false
+	if err := s.ServiceControl(context.Background(), host.OpRestart); err != host.ErrNotRoot {
 		t.Errorf("err = %v", err)
 	}
 	if len(run.calls) != 0 {
 		t.Error("root가 아니면 명령을 실행하면 안 됨")
 	}
 	s.root = true
-	if err := s.ServiceControl(context.Background(), "kill"); err == nil {
+	if err := s.ServiceControl(context.Background(), host.ServiceOp("kill")); err == nil {
 		t.Error("알 수 없는 동작을 허용함")
 	}
 }

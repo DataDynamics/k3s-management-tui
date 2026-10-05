@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -21,8 +22,10 @@ import (
 	"github.com/DataDynamics/k3s-management-tui/internal/config"
 	"github.com/DataDynamics/k3s-management-tui/internal/executil"
 	"github.com/DataDynamics/k3s-management-tui/internal/helm"
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 	"github.com/DataDynamics/k3s-management-tui/internal/k3s"
 	"github.com/DataDynamics/k3s-management-tui/internal/kube"
+	"github.com/DataDynamics/k3s-management-tui/internal/kubeadm"
 	"github.com/DataDynamics/k3s-management-tui/internal/runtime"
 	"github.com/DataDynamics/k3s-management-tui/internal/ui/styles"
 	"github.com/DataDynamics/k3s-management-tui/internal/ui/views"
@@ -145,7 +148,7 @@ func resolveKubeconfig(cfg *config.Config, flagPath string) {
 	}
 }
 
-// decideHost는 배포판을 판별하고 호스트 관리(Host 탭)를 켤지 정합니다.
+// decideHost는 배포판을 판별하고 호스트 관리(Host 탭)를 켤지, 어떤 구현(K3S, kubeadm)을 쓸지 정합니다.
 func decideHost(env *views.Env) {
 	cfg := env.Cfg
 	server, _ := kube.ServerURL(cfg.Cluster.Kubeconfig, cfg.Cluster.Context)
@@ -153,43 +156,64 @@ func decideHost(env *views.Env) {
 		server = env.Kube.Server
 	}
 	env.LocalAPI = kube.IsLocalServer(server)
-	_, binErr := os.Stat(cfg.K3s.Binary)
+	_, k3sErr := os.Stat(cfg.K3s.Binary)
+	kubeadmNode := fileExists(filepath.Join(cfg.Kubeadm.KubernetesDir, "manifests", "kube-apiserver.yaml")) ||
+		fileExists(cfg.Kubeadm.KubeletConfig)
 
 	env.Distro = cfg.Cluster.Distribution
 	if env.Distro == config.DistroAuto {
 		switch {
 		case env.Kube != nil:
 			env.Distro = env.Kube.DetectDistro(contextBG())
-		case env.LocalAPI && binErr == nil:
-			// API 서버가 응답하지 않아도(k3s 중지 등) 로컬 K3S면 서비스를 다시 띄울 수 있어야 합니다.
+		// API 서버가 응답하지 않아도(k3s·kubelet 중지 등) 로컬 노드면 서비스를 다시 띄울 수 있어야 합니다.
+		case env.LocalAPI && k3sErr == nil:
 			env.Distro = config.DistroK3s
+		case env.LocalAPI && kubeadmNode:
+			env.Distro = config.DistroKubeadm
 		default:
 			env.Distro = config.DistroKubernetes
 		}
 	}
 
-	switch cfg.Cluster.HostManagement {
-	case config.HostEnabled:
-		env.HostEnabled = true
-	case config.HostDisabled:
+	runner := executil.System{Timeout: cfg.Tools.Timeout}
+	var h host.Host
+	switch env.Distro {
+	case config.DistroK3s:
+		h = k3s.NewSystem(cfg, runner)
+	case config.DistroKubeadm:
+		h = kubeadm.NewSystem(cfg, runner)
+	}
+
+	switch {
+	case cfg.Cluster.HostManagement == config.HostDisabled:
 		env.HostReason = "설정에서 끔 (cluster.host_management: disabled)"
+	case h == nil:
+		env.HostReason = kube.DistroName(env.Distro) + " 클러스터는 호스트 관리를 지원하지 않습니다 (K3S, kubeadm만 지원)"
+	case cfg.Cluster.HostManagement == config.HostEnabled:
+		env.HostEnabled = true
+	case !env.LocalAPI:
+		env.HostReason = "API 서버가 원격에 있습니다 (" + server + ")"
+	case env.Distro == config.DistroK3s && k3sErr != nil:
+		env.HostReason = "k3s 바이너리가 없습니다 (" + cfg.K3s.Binary + ")"
+	case env.Distro == config.DistroKubeadm && !kubeadmNode:
+		env.HostReason = "kubeadm 노드 파일이 없습니다 (" + cfg.Kubeadm.KubernetesDir + "/manifests, " + cfg.Kubeadm.KubeletConfig + ")"
 	default:
-		switch {
-		case env.Distro != config.DistroK3s:
-			env.HostReason = kube.DistroName(env.Distro) + " 클러스터는 호스트 관리를 아직 지원하지 않습니다 (K3S 전용)"
-		case !env.LocalAPI:
-			env.HostReason = "API 서버가 원격에 있습니다 (" + server + ")"
-		case binErr != nil:
-			env.HostReason = "k3s 바이너리가 없습니다 (" + cfg.K3s.Binary + ")"
-		default:
-			env.HostEnabled = true
-		}
+		env.HostEnabled = true
+	}
+	if env.HostEnabled {
+		env.Host = h
+		env.Crictl = &runtime.Crictl{Command: h.CrictlCommand(), Run: runner}
 	}
 	if env.Kube != nil && env.LocalAPI {
 		env.LocalPath = env.Kube.HasProvisioner(contextBG(), "rancher.io/local-path")
 	}
 	slog.Info("cluster", "distro", env.Distro, "server", server, "local", env.LocalAPI,
 		"host", env.HostEnabled, "reason", env.HostReason, "localpath", env.LocalPath)
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // stateDir는 root가 아닐 때 로그를 둘 위치입니다.
@@ -243,13 +267,10 @@ func setupLogging(cfg *config.Config) func() {
 }
 
 func buildEnv(cfg *config.Config) (*views.Env, func()) {
-	runner := executil.System{Timeout: cfg.Tools.Timeout}
 	env := &views.Env{
 		Cfg:     cfg,
 		Styles:  styles.New(cfg.Theme),
 		Metrics: kube.NewMetrics(),
-		Host:    k3s.NewSystem(cfg, runner),
-		Crictl:  &runtime.Crictl{Binary: cfg.K3s.Binary, Run: runner},
 		Helm: &helm.Client{Binary: cfg.Tools.Helm, Context: cfg.Cluster.Context,
 			Run: executil.System{Timeout: cfg.Tools.Timeout, Env: []string{"KUBECONFIG=" + cfg.Cluster.Kubeconfig}}},
 		ReadOnly: cfg.Safety.ReadOnly,
@@ -330,27 +351,35 @@ func runCheck(env *views.Env) error {
 	}
 	kc := cfg.KubectlCommand(env.LocalK3s())
 	fmt.Printf("[%s] kubectl         %s\n", ok(true), strings.Join(kc, " "))
-	fmt.Printf("[%s] 편집기          %s\n", ok(true), strings.Join(cfg.EditorCommand(), " "))
+	editor := cfg.EditorCommand()
+	_, edErr := exec.LookPath(editor[0])
+	fmt.Printf("[%s] 편집기          %s\n", ok(edErr == nil), strings.Join(editor, " "))
 
 	if !env.HostEnabled {
 		fmt.Printf("[SKIP] 호스트 관리   %s\n", env.HostReason)
 	} else {
+		fmt.Printf("[%s] 호스트 관리     %s\n", ok(true), kube.DistroName(h.Distro()))
 		fmt.Printf("[%s] root 권한       uid=%d\n", ok(h.IsRoot()), os.Geteuid())
 		st, err := h.ServiceStatus(contextBG())
 		if err != nil {
-			fmt.Printf("[%s] k3s 서비스      %v\n", ok(false), err)
+			fmt.Printf("[%s] 서비스          %v\n", ok(false), err)
 		} else {
-			fmt.Printf("[%s] k3s 서비스      %s.service %s/%s\n", ok(st.Active()), st.Unit, st.ActiveState, st.SubState)
+			fmt.Printf("[%s] 서비스          %s.service %s/%s\n", ok(st.Active()), st.Unit, st.ActiveState, st.SubState)
 		}
 		if v, err := h.Version(contextBG()); err == nil {
-			fmt.Printf("[%s] k3s 바이너리    %s\n", ok(true), v)
+			fmt.Printf("[%s] 버전            %s\n", ok(true), v)
 		} else {
-			fmt.Printf("[%s] k3s 바이너리    %v\n", ok(false), err)
+			fmt.Printf("[%s] 버전            %v\n", ok(false), err)
 		}
-		fmt.Printf("[%s] data-dir        %s\n", ok(dirExists(h.DataDir())), h.DataDir())
+		fmt.Printf("[%s] 노드 디렉터리   %s\n", ok(dirExists(h.DataDir())), h.DataDir())
+		fmt.Printf("[%s] 설정 파일       %s\n", ok(fileExists(h.ConfigPath())), h.ConfigPath())
 		ds := h.Datastore()
-		fmt.Printf("[%s] 데이터스토어    %s %s\n", ok(ds.Kind != k3s.DatastoreUnknown), ds.Kind, ds.Path+ds.Endpoint)
-		fmt.Printf("     백업 위치       %s (보관 %d개)\n", cfg.Backup.Dir, cfg.Backup.Keep)
+		fmt.Printf("[%s] 데이터스토어    %s %s\n", ok(ds.Kind != host.DatastoreUnknown), ds.Kind, ds.Path+ds.Endpoint)
+		fmt.Printf("     crictl          %s\n", strings.Join(h.CrictlCommand(), " "))
+		caps := h.Caps()
+		if caps.Backup {
+			fmt.Printf("     백업 위치       %s (보관 %d개)\n", cfg.Backup.Dir, cfg.Backup.Keep)
+		}
 	}
 	fmt.Printf("     로그            %s\n", orDefault(cfg.Logging.File, "(비활성)"))
 	fmt.Printf("     감사 로그       %s\n", cfg.Audit.File)

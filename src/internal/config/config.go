@@ -17,6 +17,7 @@ import (
 type Config struct {
 	Cluster     ClusterConfig     `yaml:"cluster"`
 	K3s         K3sConfig         `yaml:"k3s"`
+	Kubeadm     KubeadmConfig     `yaml:"kubeadm"`
 	UI          UIConfig          `yaml:"ui"`
 	Safety      SafetyConfig      `yaml:"safety"`
 	Backup      BackupConfig      `yaml:"backup"`
@@ -71,6 +72,18 @@ type K3sConfig struct {
 	DataDir     string `yaml:"data_dir"` // auto = config.yaml의 data-dir
 }
 
+// KubeadmConfig는 kubeadm 노드의 Host 탭에서 쓰는 경로와 도구입니다.
+type KubeadmConfig struct {
+	ServiceName   string `yaml:"service_name"`   // kubelet
+	KubernetesDir string `yaml:"kubernetes_dir"` // /etc/kubernetes (manifests, pki, admin.conf)
+	KubeletConfig string `yaml:"kubelet_config"` // /var/lib/kubelet/config.yaml
+	KubeletFlags  string `yaml:"kubelet_flags"`  // /var/lib/kubelet/kubeadm-flags.env
+	Binary        string `yaml:"binary"`         // kubeadm
+	Kubelet       string `yaml:"kubelet"`        // kubelet (버전 확인용)
+	Crictl        string `yaml:"crictl"`         // crictl
+	Etcdctl       string `yaml:"etcdctl"`        // 호스트 etcdctl (없으면 etcd 컨테이너 안의 etcdctl을 씁니다)
+}
+
 type UIConfig struct {
 	RefreshInterval  time.Duration `yaml:"refresh_interval"`
 	DefaultNamespace string        `yaml:"default_namespace"`
@@ -122,6 +135,16 @@ func Default() *Config {
 			ServiceName: "k3s",
 			Binary:      "/usr/local/bin/k3s",
 			DataDir:     "auto",
+		},
+		Kubeadm: KubeadmConfig{
+			ServiceName:   "kubelet",
+			KubernetesDir: "/etc/kubernetes",
+			KubeletConfig: "/var/lib/kubelet/config.yaml",
+			KubeletFlags:  "/var/lib/kubelet/kubeadm-flags.env",
+			Binary:        "kubeadm",
+			Kubelet:       "kubelet",
+			Crictl:        "crictl",
+			Etcdctl:       "etcdctl",
 		},
 		UI: UIConfig{
 			RefreshInterval:  2 * time.Second,
@@ -245,6 +268,20 @@ func (c *Config) Validate() error {
 	}
 	if c.K3s.DataDir == "" {
 		c.K3s.DataDir = "auto"
+	}
+	// kubeadm 경로·도구는 비어 있으면 기본값을 씁니다.
+	ka, dk := &c.Kubeadm, d.Kubeadm
+	for _, f := range []struct {
+		v   *string
+		def string
+	}{
+		{&ka.ServiceName, dk.ServiceName}, {&ka.KubernetesDir, dk.KubernetesDir}, {&ka.KubeletConfig, dk.KubeletConfig},
+		{&ka.KubeletFlags, dk.KubeletFlags}, {&ka.Binary, dk.Binary}, {&ka.Kubelet, dk.Kubelet},
+		{&ka.Crictl, dk.Crictl}, {&ka.Etcdctl, dk.Etcdctl},
+	} {
+		if *f.v == "" {
+			*f.v = f.def
+		}
 	}
 	if c.UI.DefaultNamespace == "" {
 		c.UI.DefaultNamespace = "all"

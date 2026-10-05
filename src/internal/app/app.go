@@ -447,7 +447,7 @@ func (m *Model) requestAction(req views.ActionRequestMsg) tea.Cmd {
 		m.setToast("읽기 전용 모드입니다: "+a.Label+" 실행 불가", true)
 		return nil
 	}
-	if a.NeedRoot && !env.Host.IsRoot() {
+	if a.NeedRoot && (env.Host == nil || !env.Host.IsRoot()) {
 		m.setToast(a.Label+": root 권한이 필요합니다", true)
 		return nil
 	}
@@ -522,6 +522,10 @@ func (m *Model) confirmStage(req views.ActionRequestMsg, input string) tea.Cmd {
 func (m *Model) execAction(x actionExecMsg) tea.Cmd {
 	a, env, row := x.req.Action, m.env, x.req.Row
 	target := views.Target(x.req.Source, row)
+	if a.NoRow {
+		// 행과 무관한 작업(서비스 재시작, 인증서 갱신, 백업 등)은 우연히 선택된 행을 대상으로 기록하지 않습니다.
+		target = x.req.Source
+	}
 	if a.Open != nil {
 		return a.Open(env, row, x.input)
 	}

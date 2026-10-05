@@ -2,8 +2,6 @@ package views
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/DataDynamics/k3s-management-tui/internal/k3s"
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 	"github.com/DataDynamics/k3s-management-tui/internal/kube"
 	"github.com/DataDynamics/k3s-management-tui/internal/textdiff"
 	"github.com/DataDynamics/k3s-management-tui/internal/ui/components"
@@ -32,9 +30,9 @@ func kv(key, value string, level kube.Level) Row {
 
 type serviceSource struct{ baseSource }
 
-func newServiceSource() Source {
+func newServiceSource(h host.Host) Source {
 	s := &serviceSource{baseSource{key: "service", title: "Service"}}
-	s.actions = serviceActions()
+	s.actions = serviceActions(h)
 	return s
 }
 
@@ -72,7 +70,7 @@ func (s *serviceSource) Load(env *Env) ([]Row, error) {
 		rows = append(rows, kv("restarts", fmt.Sprint(st.Restarts), rl))
 	}
 	if v, err := h.Version(c); err == nil {
-		rows = append(rows, kv("k3s version", v, kube.LevelNone))
+		rows = append(rows, kv("version", v, kube.LevelNone))
 	}
 	if env.Kube != nil {
 		ping := "ok"
@@ -99,11 +97,11 @@ func (s *serviceSource) Load(env *Env) ([]Row, error) {
 	ds := h.Datastore()
 	dsv := string(ds.Kind)
 	switch ds.Kind {
-	case k3s.DatastoreSQLite:
+	case host.DatastoreSQLite:
 		dsv += "  " + ds.Path + "  (" + kube.FormatBytes(ds.Size) + ")"
-	case k3s.DatastoreEtcd:
+	case host.DatastoreEtcd:
 		dsv += "  " + ds.Path
-	case k3s.DatastoreExternal:
+	case host.DatastoreExternal:
 		dsv += "  " + ds.Endpoint
 	}
 	rows = append(rows, kv("datastore", dsv, kube.LevelNone))
@@ -135,25 +133,24 @@ func bar(pct float64, width int) string {
 	return "[" + strings.Repeat("█", n) + strings.Repeat("·", width-n) + "]"
 }
 
-// serviceControl은 k3s 서비스 제어 작업입니다.
-func serviceControl(op k3s.ServiceOp, key, label string) *Action {
+// serviceControl은 노드 서비스(k3s, kubelet) 제어 작업입니다. 중지·재시작은 서비스 이름을 다시 입력해야 합니다.
+func serviceControl(op host.ServiceOp, key, label, unit string) *Action {
 	a := &Action{ID: "service_" + string(op), Keys: []string{key}, Label: label, Mutating: true, NeedRoot: true, NoRow: true,
 		Confirm: ConfirmType,
-		Expect:  nil,
+		Expect:  func(Row) string { return unit },
 		ConfirmBody: func(env *Env, _ Row) string {
-			msg := fmt.Sprintf("systemctl %s %s 을(를) 실행합니다.", op, env.Host.ServiceName())
-			if op != k3s.OpStart {
-				msg += "\n\n단일 노드에서는 API 서버가 잠시 끊겨 화면 갱신이 멈춥니다.\n(실행 중인 Pod는 containerd에서 계속 동작합니다)"
+			msg := fmt.Sprintf("systemctl %s %s 을(를) 실행합니다.", op, unit)
+			if hint := env.Host.Caps().ServiceHint; op != host.OpStart && hint != "" {
+				msg += "\n\n" + hint
 			}
 			return msg
 		},
 		Do: func(env *Env, _ Row, _ string) (string, error) {
 			c, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			return fmt.Sprintf("%s %s 완료", env.Host.ServiceName(), op), env.Host.ServiceControl(c, op)
+			return fmt.Sprintf("%s %s 완료", unit, op), env.Host.ServiceControl(c, op)
 		}}
-	a.Expect = func(Row) string { return "k3s" }
-	if op == k3s.OpStart {
+	if op == host.OpStart {
 		a.Confirm = ConfirmYesNo
 	}
 	return a
@@ -167,7 +164,7 @@ func journalAction() *Action {
 			})
 			st := env.Styles
 			p.SetStyler(func(l string) string {
-				switch k3s.JournalLevel(l) {
+				switch host.JournalLevel(l) {
 				case "error":
 					return st.Err.Render(l)
 				case "warn":
@@ -179,55 +176,82 @@ func journalAction() *Action {
 		}}
 }
 
-func serviceActions() []*Action {
-	return []*Action{
+// controlPlaneIP는 노드 추가 명령에 넣을 컨트롤 플레인 노드 IP입니다.
+func controlPlaneIP(env *Env) string {
+	if env.Store != nil {
+		for _, u := range env.Store.List(kube.GVRNodes, "") {
+			n := kube.To[corev1.Node](u)
+			if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; ok {
+				if a := kube.NodeInternalIP(n); a != "" {
+					return a
+				}
+			}
+		}
+	}
+	return "<서버 IP>"
+}
+
+func joinAction(h host.Host) *Action {
+	caps := h.Caps()
+	a := &Action{ID: "join_command", Keys: []string{"J"}, Label: caps.JoinLabel, NoRow: true, NeedRoot: true}
+	open := func(env *Env, _ Row, _ string) tea.Cmd {
+		return Push(NewTextPage(env, caps.JoinLabel, func() (string, error) {
+			c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd, err := env.Host.JoinCommand(c, controlPlaneIP(env))
+			if caps.JoinMutates {
+				env.Audit.Record("join.token.create", env.Host.Distro(), "", err)
+			} else {
+				env.Audit.Record("join.token.view", env.Host.Distro(), "", err)
+			}
+			if err != nil {
+				return "", err
+			}
+			return caps.JoinHint + "\n\n" + cmd + "\n\n" +
+				"⚠ 이 명령의 토큰으로 노드가 클러스터에 합류할 수 있습니다. 화면 공유·기록에 주의하세요.\n", nil
+		}).SetWrap(true))
+	}
+	a.Open = open
+	if caps.JoinMutates {
+		// kubeadm은 명령을 볼 때마다 클러스터에 새 부트스트랩 토큰을 만듭니다.
+		a.Mutating, a.Confirm = true, ConfirmYesNo
+		a.ConfirmBody = func(*Env, Row) string { return caps.JoinHint }
+	}
+	return a
+}
+
+func serviceActions(h host.Host) []*Action {
+	caps, unit := h.Caps(), h.ServiceName()
+	acts := []*Action{
 		journalAction(),
-		serviceControl(k3s.OpRestart, "r", "재시작"),
-		serviceControl(k3s.OpStop, "t", "중지"),
-		serviceControl(k3s.OpStart, "a", "시작"),
-		{ID: "check_config", Keys: []string{"c"}, Label: "check-config", NoRow: true,
+		serviceControl(host.OpRestart, "r", "재시작", unit),
+		serviceControl(host.OpStop, "t", "중지", unit),
+		serviceControl(host.OpStart, "a", "시작", unit),
+	}
+	if caps.CheckLabel != "" {
+		label := caps.CheckLabel
+		acts = append(acts, &Action{ID: "check_config", Keys: []string{"c"}, Label: label, NoRow: true,
 			Open: func(env *Env, _ Row, _ string) tea.Cmd {
-				return Push(NewTextPage(env, "k3s check-config", func() (string, error) {
+				return Push(NewTextPage(env, label, func() (string, error) {
 					c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 					defer cancel()
 					return env.Host.CheckConfig(c)
 				}))
-			}},
-		{ID: "join_command", Keys: []string{"J"}, Label: "노드 추가 명령", NoRow: true, NeedRoot: true,
-			Open: func(env *Env, _ Row, _ string) tea.Cmd {
-				env.Audit.Record("k3s.token.view", "server/token", "", nil)
-				return Push(NewTextPage(env, "노드 추가 (agent join)", func() (string, error) {
-					tok, err := env.Host.Token()
-					if err != nil {
-						return "", err
-					}
-					ip := "<서버 IP>"
-					if env.Store != nil {
-						for _, u := range env.Store.List(kube.GVRNodes, "") {
-							n := kube.To[corev1.Node](u)
-							if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; ok {
-								if a := kube.NodeInternalIP(n); a != "" {
-									ip = a
-									break
-								}
-							}
-						}
-					}
-					return "새 노드에서 아래 명령을 실행하면 agent로 합류합니다.\n\n" +
-						k3s.JoinCommand(ip, tok) + "\n\n" +
-						"⚠ 토큰은 클러스터 관리자 권한과 같습니다. 화면 공유·기록에 주의하세요.\n" +
-						"현재 서버 설정에 맞는 옵션(flannel-backend: none 등)은 agent 쪽 config.yaml에도 필요할 수 있습니다.\n", nil
-				}).SetWrap(true))
-			}},
+			}})
 	}
+	if caps.JoinLabel != "" {
+		acts = append(acts, joinAction(h))
+	}
+	return acts
 }
 
-// ==== config.yaml ====
+// ==== 노드 설정 파일 (K3S config.yaml, kubelet config) ====
 
 type configSource struct{ baseSource }
 
-func newConfigSource() Source {
-	s := &configSource{baseSource{key: "k3sconfig", title: "config.yaml"}}
+func newConfigSource(h host.Host) Source {
+	caps, unit := h.Caps(), h.ServiceName()
+	s := &configSource{baseSource{key: "nodeconfig", title: caps.ConfigLabel}}
 	s.actions = []*Action{
 		{ID: "view_file", Keys: []string{"v", "enter"}, Label: "파일 보기", NoRow: true,
 			Open: func(env *Env, _ Row, _ string) tea.Cmd {
@@ -237,13 +261,28 @@ func newConfigSource() Source {
 			}},
 		{ID: "edit_config", Keys: []string{"e"}, Label: "편집", Mutating: true, NeedRoot: true, NoRow: true,
 			Open: func(env *Env, _ Row, _ string) tea.Cmd {
-				orig, err := env.Host.ReadFile(env.Host.ConfigPath())
+				path := env.Host.ConfigPath()
+				orig, err := env.Host.ReadFile(path)
 				if err != nil && !errors.Is(err, os.ErrNotExist) {
 					return Toast(err.Error(), true)
 				}
-				return editConfig(env, orig, orig)
+				return editFile(env, editSpec{
+					path: path, audit: "config.edit",
+					validate: env.Host.ValidateConfig, save: env.Host.WriteConfig,
+					after: func(env *Env, backup string) tea.Msg {
+						if !caps.ConfigRestartService {
+							return ToastMsg{Text: "저장했습니다 (백업: " + backup + ")"}
+						}
+						restart := serviceControl(host.OpRestart, "", unit+" 재시작", unit)
+						restart.Confirm = ConfirmNone
+						body := "저장했습니다.\n백업: " + backup + "\n\n설정은 " + unit + "을(를) 재시작해야 적용됩니다. 지금 재시작할까요?"
+						return DialogMsg{Dialog: components.NewConfirmType(unit+" 재시작", body, unit, func(string) tea.Cmd {
+							return func() tea.Msg { return ActionRequestMsg{Action: restart, Source: "service"} }
+						})}
+					},
+				}, orig, orig)
 			}},
-		serviceControl(k3s.OpRestart, "r", "k3s 재시작"),
+		serviceControl(host.OpRestart, "r", unit+" 재시작", unit),
 	}
 	return s
 }
@@ -254,8 +293,8 @@ func (s *configSource) Columns(*Env) []kube.Column {
 
 func (s *configSource) Summary(env *Env) string {
 	p := env.Host.ConfigPath()
-	if t := k3s.ModTime(p); !t.IsZero() {
-		return p + "  (수정: " + t.Format("2006-01-02 15:04") + ")  — 변경 후 k3s 재시작이 필요합니다"
+	if t := host.ModTime(p); !t.IsZero() {
+		return p + "  (수정: " + t.Format("2006-01-02 15:04") + ")  — " + env.Host.Caps().ConfigHint
 	}
 	return p + " (파일 없음 — 편집하면 새로 만듭니다)"
 }
@@ -272,9 +311,19 @@ func (s *configSource) Load(env *Env) ([]Row, error) {
 	return rows, nil
 }
 
-// editConfig는 임시 파일을 외부 편집기로 연 뒤 검증 → diff 확인 → 백업 후 저장 → 재시작 질의 순으로 진행합니다.
-func editConfig(env *Env, orig, content string) tea.Cmd {
-	f, err := os.CreateTemp("", "k3s-config-*.yaml")
+// editSpec은 외부 편집기로 노드 파일을 고치는 절차의 설정입니다.
+type editSpec struct {
+	path     string
+	audit    string                                  // 감사 로그 작업 이름
+	validate func([]byte) error                      // 저장 전 검증
+	save     func([]byte) (backup string, err error) // 백업 후 저장
+	after    func(env *Env, backup string) tea.Msg   // 저장 후 안내 (재시작 질의 등)
+}
+
+// editFile은 임시 파일을 외부 편집기로 연 뒤 검증 → diff 확인 → 백업 후 저장 → 후속 안내 순으로 진행합니다.
+// 검증에 실패하면 고친 내용을 그대로 다시 편집할 수 있습니다.
+func editFile(env *Env, spec editSpec, orig, content string) tea.Cmd {
+	f, err := os.CreateTemp("", "k3stui-*-"+filepath.Base(spec.path))
 	if err != nil {
 		return Toast(err.Error(), true)
 	}
@@ -296,71 +345,92 @@ func editConfig(env *Env, orig, content string) tea.Cmd {
 		if edited == orig {
 			return ToastMsg{Text: "변경 사항이 없습니다"}
 		}
-		if verr := k3s.ValidateYAML(data); verr != nil {
-			return DialogMsg{Dialog: components.NewConfirm("YAML 오류 — 다시 편집할까요?", verr.Error(),
-				func(string) tea.Cmd { return editConfig(env, orig, edited) })}
+		if verr := spec.validate(data); verr != nil {
+			return DialogMsg{Dialog: components.NewConfirm("검증 실패 — 다시 편집할까요?", verr.Error(),
+				func(string) tea.Cmd { return editFile(env, spec, orig, edited) })}
 		}
-		diff := textdiff.Unified(env.Host.ConfigPath(), env.Host.ConfigPath()+" (편집본)", orig, edited, 3)
-		return DialogMsg{Dialog: components.NewConfirm("config.yaml 변경을 저장할까요?", diff,
-			func(string) tea.Cmd { return saveConfig(env, data) })}
+		diff := textdiff.Unified(spec.path, spec.path+" (편집본)", orig, edited, 3)
+		return DialogMsg{Dialog: components.NewConfirm(filepath.Base(spec.path)+" 변경을 저장할까요?", diff,
+			func(string) tea.Cmd {
+				return func() tea.Msg {
+					backup, err := spec.save(data)
+					env.Audit.Record(spec.audit, spec.path, "backup="+backup, err)
+					if err != nil {
+						return ToastMsg{Text: "저장 실패: " + err.Error(), Err: true}
+					}
+					return spec.after(env, backup)
+				}
+			})}
 	})
 }
 
-func saveConfig(env *Env, data []byte) tea.Cmd {
-	return func() tea.Msg {
-		backup, err := env.Host.WriteConfig(data)
-		env.Audit.Record("k3s.config.edit", env.Host.ConfigPath(), "backup="+backup, err)
-		if err != nil {
-			return ToastMsg{Text: "저장 실패: " + err.Error(), Err: true}
-		}
-		restart := serviceControl(k3s.OpRestart, "", "k3s 재시작")
-		restart.Confirm = ConfirmNone
-		body := "저장했습니다.\n백업: " + backup + "\n\n설정은 k3s를 재시작해야 적용됩니다. 지금 재시작할까요?"
-		return DialogMsg{Dialog: components.NewConfirmType("k3s 재시작", body, "k3s", func(string) tea.Cmd {
-			return func() tea.Msg { return ActionRequestMsg{Action: restart, Source: "service"} }
-		})}
-	}
+// ==== manifest (K3S 자동 배포, kubeadm static Pod) ====
+
+type manifestSource struct {
+	baseSource
+	skip bool
 }
 
-// ==== 자동 배포 manifest ====
-
-type manifestSource struct{ baseSource }
-
-func newManifestSource() Source {
-	s := &manifestSource{baseSource{key: "manifests", title: "Manifests"}}
+func newManifestSource(h host.Host) Source {
+	caps := h.Caps()
+	s := &manifestSource{baseSource: baseSource{key: "manifests", title: caps.ManifestsLabel}, skip: caps.ManifestSkip}
 	s.actions = []*Action{
 		{ID: "view_file", Keys: []string{"v", "enter"}, Label: "보기",
 			Open: func(env *Env, row Row, _ string) tea.Cmd {
-				m := row.Data.(k3s.Manifest)
+				m := row.Data.(host.Manifest)
 				return Push(NewTextPage(env, m.Path, func() (string, error) { return env.Host.ReadFile(m.Path) }).
 					SetStyler(yamlStyler(env)))
 			}},
-		{ID: "toggle_skip", Keys: []string{"s"}, Label: "skip 전환", Mutating: true, NeedRoot: true, Confirm: ConfirmYesNo,
+	}
+	if caps.ManifestEdit {
+		s.actions = append(s.actions, &Action{ID: "edit_manifest", Keys: []string{"e"}, Label: "편집", Mutating: true, NeedRoot: true,
+			Open: func(env *Env, row Row, _ string) tea.Cmd {
+				m := row.Data.(host.Manifest)
+				orig, err := env.Host.ReadFile(m.Path)
+				if err != nil {
+					return Toast(err.Error(), true)
+				}
+				return editFile(env, editSpec{
+					path: m.Path, audit: "manifest.edit",
+					validate: func(b []byte) error { return host.ValidateYAML(b) },
+					save:     func(b []byte) (string, error) { return env.Host.WriteManifest(m.Path, b) },
+					after: func(_ *Env, backup string) tea.Msg {
+						return ToastMsg{Text: "저장했습니다 (백업: " + backup + "). kubelet이 " + m.Rel + " Pod를 다시 만듭니다"}
+					},
+				}, orig, orig)
+			}})
+	}
+	if caps.ManifestSkip {
+		s.actions = append(s.actions, &Action{ID: "toggle_skip", Keys: []string{"s"}, Label: "skip 전환", Mutating: true, NeedRoot: true, Confirm: ConfirmYesNo,
 			ConfirmBody: func(_ *Env, row Row) string {
-				m := row.Data.(k3s.Manifest)
+				m := row.Data.(host.Manifest)
 				if m.Skipped {
 					return m.Rel + ".skip 을 지워 K3S가 다시 이 manifest를 배포하게 합니다."
 				}
 				return m.Rel + ".skip 을 만들어 K3S가 이 manifest를 더 이상 적용하지 않게 합니다.\n(이미 배포된 리소스는 지워지지 않습니다)"
 			},
 			Do: func(env *Env, row Row, _ string) (string, error) {
-				m := row.Data.(k3s.Manifest)
+				m := row.Data.(host.Manifest)
 				err := env.Host.SetManifestSkip(m.Path, !m.Skipped)
 				if m.Skipped {
 					return "skip 해제: " + m.Rel, err
 				}
 				return "skip 설정: " + m.Rel, err
-			}},
+			}})
 	}
 	return s
 }
 
 func (s *manifestSource) Columns(*Env) []kube.Column {
-	return []kube.Column{{Name: "FILE"}, {Name: "SIZE"}, {Name: "MODIFIED"}, {Name: "SKIP"}}
+	cols := []kube.Column{{Name: "FILE"}, {Name: "SIZE"}, {Name: "MODIFIED"}}
+	if s.skip {
+		cols = append(cols, kube.Column{Name: "SKIP"})
+	}
+	return cols
 }
 
 func (s *manifestSource) Summary(env *Env) string {
-	return filepath.Join(env.Host.DataDir(), "server", "manifests") + " — K3S가 시작 시·변경 시 자동 적용하는 파일"
+	return env.Host.ManifestsDir() + " — " + env.Host.Caps().ManifestsHint
 }
 
 func (s *manifestSource) Load(env *Env) ([]Row, error) {
@@ -370,12 +440,16 @@ func (s *manifestSource) Load(env *Env) ([]Row, error) {
 	}
 	rows := make([]Row, 0, len(list))
 	for _, m := range list {
-		skip, level := "", kube.LevelNone
-		if m.Skipped {
-			skip, level = "skip", kube.LevelMuted
+		level := kube.LevelNone
+		cells := []string{m.Rel, kube.FormatBytes(m.Size), m.ModTime.Format("2006-01-02 15:04")}
+		if s.skip {
+			skip := ""
+			if m.Skipped {
+				skip, level = "skip", kube.LevelMuted
+			}
+			cells = append(cells, skip)
 		}
-		rows = append(rows, Row{ID: m.Path, Name: m.Rel, Data: m, Level: level,
-			Cells: []string{m.Rel, kube.FormatBytes(m.Size), m.ModTime.Format("2006-01-02 15:04"), skip}})
+		rows = append(rows, Row{ID: m.Path, Name: m.Rel, Data: m, Level: level, Cells: cells})
 	}
 	return rows, nil
 }
@@ -384,25 +458,26 @@ func (s *manifestSource) Load(env *Env) ([]Row, error) {
 
 type certSource struct{ baseSource }
 
-func newCertSource() Source {
+func newCertSource(h host.Host) Source {
+	caps := h.Caps()
 	s := &certSource{baseSource{key: "certs", title: "Certificates"}}
 	s.actions = []*Action{
 		{ID: "view_cert", Keys: []string{"v", "enter"}, Label: "상세",
 			Open: func(env *Env, row Row, _ string) tea.Cmd {
-				ci := row.Data.(k3s.CertInfo)
-				return Push(NewTextPage(env, ci.Path, func() (string, error) { return describeCert(ci.Path) }))
+				ci := row.Data.(host.CertInfo)
+				return Push(NewTextPage(env, ci.Path, func() (string, error) { return host.DescribeCertFile(ci.Path) }))
 			}},
-		{ID: "rotate_certs", Keys: []string{"R"}, Label: "인증서 갱신", Mutating: true, NeedRoot: true, NoRow: true, Confirm: ConfirmType,
-			Expect: func(Row) string { return "k3s" },
-			ConfirmBody: func(*Env, Row) string {
-				return "k3s를 중지하고 'k3s certificate rotate'로 서버/클라이언트 인증서를 새로 발급한 뒤 다시 시작합니다.\n" +
-					"CA 인증서는 바뀌지 않습니다. 외부에서 쓰는 kubeconfig의 클라이언트 인증서는 다시 복사해야 합니다."
-			},
+	}
+	if caps.CertRotateHint != "" {
+		s.actions = append(s.actions, &Action{ID: "rotate_certs", Keys: []string{"R"}, Label: "인증서 갱신",
+			Mutating: true, NeedRoot: true, NoRow: true, Confirm: ConfirmType,
+			Expect:      func(Row) string { return "renew" },
+			ConfirmBody: func(*Env, Row) string { return caps.CertRotateHint },
 			Do: func(env *Env, _ Row, _ string) (string, error) {
 				c, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer cancel()
 				return "인증서 갱신 완료", env.Host.RotateCertificates(c, progressFn(env, "인증서 갱신"))
-			}},
+			}})
 	}
 	return s
 }
@@ -419,20 +494,17 @@ func (s *certSource) Columns(*Env) []kube.Column {
 	return []kube.Column{{Name: "FILE"}, {Name: "SUBJECT", MaxWidth: 40}, {Name: "ISSUER", MaxWidth: 40}, {Name: "NOT AFTER"}, {Name: "DAYS"}}
 }
 
-func (s *certSource) Summary(env *Env) string {
-	return "만료 30일 이내는 노란색, 만료는 빨간색. K3S는 만료 90일 전부터 재시작 시 자동 갱신합니다."
-}
+func (s *certSource) Summary(env *Env) string { return env.Host.Caps().CertHint }
 
 func (s *certSource) Load(env *Env) ([]Row, error) {
 	list, err := env.Host.Certificates()
 	if err != nil {
 		return nil, err
 	}
-	dd := env.Host.DataDir()
 	now := env.NowTime()
 	rows := make([]Row, 0, len(list))
 	for _, c := range list {
-		rel, _ := filepath.Rel(dd, c.Path)
+		rel := c.Label
 		days := c.DaysLeft(now)
 		level := kube.LevelNone
 		switch {
@@ -445,68 +517,23 @@ func (s *certSource) Load(env *Env) ([]Row, error) {
 		if c.IsCA {
 			subj += " (CA)"
 		}
-		rows = append(rows, Row{ID: c.Path, Name: rel, Data: c, Level: level,
+		rows = append(rows, Row{ID: c.Path + "#" + rel, Name: rel, Data: c, Level: level,
 			Cells: []string{rel, subj, c.Issuer, c.NotAfter.Local().Format("2006-01-02"), fmt.Sprint(days)}})
 	}
 	return rows, nil
 }
 
-func describeCert(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	var sb strings.Builder
-	for i := 0; ; i++ {
-		var block *pem.Block
-		block, data = pem.Decode(data)
-		if block == nil {
-			break
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintf(&sb, "── 인증서 #%d ──\n", i+1)
-		fmt.Fprintf(&sb, "Subject:      %s\n", cert.Subject)
-		fmt.Fprintf(&sb, "Issuer:       %s\n", cert.Issuer)
-		fmt.Fprintf(&sb, "Serial:       %s\n", cert.SerialNumber)
-		fmt.Fprintf(&sb, "Not Before:   %s\n", cert.NotBefore.Local())
-		fmt.Fprintf(&sb, "Not After:    %s\n", cert.NotAfter.Local())
-		fmt.Fprintf(&sb, "Is CA:        %t\n", cert.IsCA)
-		if len(cert.DNSNames) > 0 {
-			fmt.Fprintf(&sb, "DNS SANs:     %s\n", strings.Join(cert.DNSNames, ", "))
-		}
-		if len(cert.IPAddresses) > 0 {
-			ips := make([]string, len(cert.IPAddresses))
-			for j, ip := range cert.IPAddresses {
-				ips[j] = ip.String()
-			}
-			fmt.Fprintf(&sb, "IP SANs:      %s\n", strings.Join(ips, ", "))
-		}
-		var usages []string
-		for _, u := range cert.ExtKeyUsage {
-			switch u {
-			case x509.ExtKeyUsageServerAuth:
-				usages = append(usages, "serverAuth")
-			case x509.ExtKeyUsageClientAuth:
-				usages = append(usages, "clientAuth")
-			}
-		}
-		if len(usages) > 0 {
-			fmt.Fprintf(&sb, "Ext Usage:    %s\n", strings.Join(usages, ", "))
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String(), nil
-}
-
 // ==== 데이터스토어 백업 ====
 
-type backupSource struct{ baseSource }
+type backupSource struct {
+	baseSource
+	extra string
+}
 
-func newBackupSource() Source {
-	s := &backupSource{baseSource{key: "backups", title: "Backups"}}
+func newBackupSource(h host.Host) Source {
+	caps := h.Caps()
+	s := &backupSource{baseSource: baseSource{key: "backups", title: "Backups"}, extra: caps.BackupExtra}
+	canRestore := func(row Row) bool { return caps.Restore && row.Data.(host.BackupFile).Kind == host.DatastoreSQLite }
 	s.actions = []*Action{
 		{ID: "backup_now", Keys: []string{"b"}, Label: "지금 백업", Mutating: true, NeedRoot: true, NoRow: true,
 			Do: func(env *Env, _ Row, _ string) (string, error) {
@@ -516,10 +543,10 @@ func newBackupSource() Source {
 				return "백업 완료: " + p, err
 			}},
 		{ID: "restore_backup", Keys: []string{"R"}, Label: "복원", Mutating: true, NeedRoot: true, Confirm: ConfirmType,
-			Available: func(_ *Env, row Row) bool { return row.Data.(k3s.BackupFile).Kind == k3s.DatastoreSQLite },
+			Available: func(_ *Env, row Row) bool { return canRestore(row) },
 			Expect:    func(Row) string { return "restore" },
 			ConfirmBody: func(env *Env, row Row) string {
-				b := row.Data.(k3s.BackupFile)
+				b := row.Data.(host.BackupFile)
 				return fmt.Sprintf("데이터스토어를 %s (%s) 시점으로 되돌립니다.\n\n"+
 					"1) 백업 무결성 검사  2) k3s 중지  3) 현재 state.db를 state.db.pre-restore-<시각>으로 보관\n"+
 					"4) 백업 복사  5) k3s 시작\n\n백업 이후 생성·변경된 모든 리소스 정보가 사라집니다.",
@@ -528,8 +555,16 @@ func newBackupSource() Source {
 			Do: func(env *Env, row Row, _ string) (string, error) {
 				c, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 				defer cancel()
-				b := row.Data.(k3s.BackupFile)
+				b := row.Data.(host.BackupFile)
 				return "복원 완료: " + b.Name, env.Host.RestoreBackup(c, b.Name, progressFn(env, "복원"))
+			}},
+		// 자동 복원을 지원하지 않는 백업(etcd 스냅샷)은 같은 키로 수동 복원 절차를 보여줍니다.
+		{ID: "restore_guide", Keys: []string{"R"}, Label: "복원 안내",
+			Available: func(_ *Env, row Row) bool { return !canRestore(row) },
+			Open: func(env *Env, row Row, _ string) tea.Cmd {
+				return Push(NewTextPage(env, "복원 안내: "+row.Name, func() (string, error) {
+					return env.Host.RestoreGuide(row.Name), nil
+				}).SetWrap(true))
 			}},
 		{ID: "delete_backup", Keys: []string{"x"}, Label: "삭제", Mutating: true, NeedRoot: true, Confirm: ConfirmYesNo,
 			ConfirmBody: func(_ *Env, row Row) string { return "백업 파일 " + row.Name + " 을(를) 삭제합니다." },
@@ -543,7 +578,11 @@ func newBackupSource() Source {
 }
 
 func (s *backupSource) Columns(*Env) []kube.Column {
-	return []kube.Column{{Name: "NAME"}, {Name: "KIND"}, {Name: "SIZE"}, {Name: "CREATED"}, {Name: "TOKEN"}}
+	cols := []kube.Column{{Name: "NAME"}, {Name: "KIND"}, {Name: "SIZE"}, {Name: "CREATED"}}
+	if s.extra != "" {
+		cols = append(cols, kube.Column{Name: s.extra})
+	}
+	return cols
 }
 
 func (s *backupSource) Summary(env *Env) string {
@@ -552,7 +591,11 @@ func (s *backupSource) Summary(env *Env) string {
 	if ds.Path != "" {
 		sum += " (" + ds.Path + ")"
 	}
-	return sum + fmt.Sprintf("  ·  백업 위치: %s  ·  보관 %d개", env.Cfg.Backup.Dir, env.Cfg.Backup.Keep)
+	sum += fmt.Sprintf("  ·  백업 위치: %s  ·  보관 %d개", env.Cfg.Backup.Dir, env.Cfg.Backup.Keep)
+	if hint := env.Host.Caps().BackupHint; hint != "" {
+		sum += "  ·  " + hint
+	}
+	return sum
 }
 
 func (s *backupSource) Load(env *Env) ([]Row, error) {
@@ -562,12 +605,15 @@ func (s *backupSource) Load(env *Env) ([]Row, error) {
 	}
 	rows := make([]Row, 0, len(list))
 	for _, b := range list {
-		tok := ""
-		if b.HasToken {
-			tok = "yes"
+		cells := []string{b.Name, string(b.Kind), kube.FormatBytes(b.Size), b.Time.Format("2006-01-02 15:04:05")}
+		if s.extra != "" {
+			extra := ""
+			if b.HasExtra {
+				extra = "yes"
+			}
+			cells = append(cells, extra)
 		}
-		rows = append(rows, Row{ID: b.Path, Name: b.Name, Data: b,
-			Cells: []string{b.Name, string(b.Kind), kube.FormatBytes(b.Size), b.Time.Format("2006-01-02 15:04:05"), tok}})
+		rows = append(rows, Row{ID: b.Path, Name: b.Name, Data: b, Cells: cells})
 	}
 	return rows, nil
 }
@@ -604,7 +650,7 @@ func (s *containerSource) Columns(*Env) []kube.Column {
 
 func (s *containerSource) Load(env *Env) ([]Row, error) {
 	if !env.Host.IsRoot() {
-		return nil, k3s.ErrNotRoot
+		return nil, host.ErrNotRoot
 	}
 	c, cancel := ctx()
 	defer cancel()
@@ -686,7 +732,7 @@ func (s *imageSource) Summary(env *Env) string {
 
 func (s *imageSource) Load(env *Env) ([]Row, error) {
 	if !env.Host.IsRoot() {
-		return nil, k3s.ErrNotRoot
+		return nil, host.ErrNotRoot
 	}
 	c, cancel := ctx()
 	defer cancel()
@@ -710,10 +756,16 @@ func (s *imageSource) Load(env *Env) ([]Row, error) {
 	return rows, nil
 }
 
-// HostSources는 Host 탭의 하위 탭 목록입니다.
-func HostSources() []Source {
-	return []Source{
-		newServiceSource(), newConfigSource(), newManifestSource(), newCertSource(),
-		newBackupSource(), newContainerSource(), newImageSource(),
+// HostSources는 Host 탭의 하위 탭 목록입니다. 배포판이 지원하는 기능(Capabilities)에 따라 구성합니다.
+func HostSources(h host.Host) []Source {
+	caps := h.Caps()
+	out := []Source{newServiceSource(h), newConfigSource(h)}
+	if caps.ManifestsLabel != "" {
+		out = append(out, newManifestSource(h))
 	}
+	out = append(out, newCertSource(h))
+	if caps.Backup {
+		out = append(out, newBackupSource(h))
+	}
+	return append(out, newContainerSource(), newImageSource())
 }

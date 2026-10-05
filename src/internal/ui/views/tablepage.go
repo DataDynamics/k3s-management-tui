@@ -75,6 +75,8 @@ func (p *TablePage) HasSource(key string) bool {
 func (p *TablePage) switchTo(i int) {
 	p.idx = (i + len(p.sources)) % len(p.sources)
 	p.gen++
+	// 이전 소스의 로딩 결과는 세대 번호가 달라 버려지므로, 로딩 중 표시를 여기서 풀어야 새 소스를 읽을 수 있습니다.
+	p.loading = false
 	p.rows, p.err = nil, nil
 	p.table = components.Table{}
 	p.filter.SetValue("")

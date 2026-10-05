@@ -3,59 +3,30 @@ package k3s
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	_ "modernc.org/sqlite" // SQLite 드라이버 (cgo 불필요)
+
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 )
-
-// DatastoreKind는 K3S 데이터스토어 종류입니다.
-type DatastoreKind string
-
-const (
-	DatastoreSQLite   DatastoreKind = "sqlite"
-	DatastoreEtcd     DatastoreKind = "etcd"
-	DatastoreExternal DatastoreKind = "external"
-	DatastoreUnknown  DatastoreKind = "unknown"
-)
-
-// DatastoreInfo는 데이터스토어 상태입니다.
-type DatastoreInfo struct {
-	Kind     DatastoreKind
-	Path     string // SQLite 파일 또는 etcd 디렉터리
-	Endpoint string // external일 때 (자격 증명은 가림)
-	Size     int64  // SQLite: db+wal 크기
-}
-
-// BackupFile은 백업 파일 하나입니다.
-type BackupFile struct {
-	Name     string
-	Path     string
-	Size     int64
-	Time     time.Time
-	Kind     DatastoreKind
-	HasToken bool
-}
 
 const sqlitePrefix = "k3s-sqlite-"
 const etcdPrefix = "k3stui-etcd"
 
 // Datastore는 데이터스토어 종류를 판별합니다 (설계 6장).
-func (s *System) Datastore() DatastoreInfo {
+func (s *System) Datastore() host.DatastoreInfo {
 	if kc, err := s.LoadConfig(); err == nil {
 		if ep := kc.String("datastore-endpoint"); ep != "" {
-			return DatastoreInfo{Kind: DatastoreExternal, Endpoint: maskEndpoint(ep)}
+			return host.DatastoreInfo{Kind: host.DatastoreExternal, Endpoint: maskEndpoint(ep)}
 		}
 	}
 	dbDir := filepath.Join(s.DataDir(), "server", "db")
 	if st, err := os.Stat(filepath.Join(dbDir, "etcd")); err == nil && st.IsDir() {
-		return DatastoreInfo{Kind: DatastoreEtcd, Path: filepath.Join(dbDir, "etcd")}
+		return host.DatastoreInfo{Kind: host.DatastoreEtcd, Path: filepath.Join(dbDir, "etcd")}
 	}
 	db := filepath.Join(dbDir, "state.db")
 	if st, err := os.Stat(db); err == nil {
@@ -63,9 +34,9 @@ func (s *System) Datastore() DatastoreInfo {
 		if w, err := os.Stat(db + "-wal"); err == nil {
 			size += w.Size()
 		}
-		return DatastoreInfo{Kind: DatastoreSQLite, Path: db, Size: size}
+		return host.DatastoreInfo{Kind: host.DatastoreSQLite, Path: db, Size: size}
 	}
-	return DatastoreInfo{Kind: DatastoreUnknown}
+	return host.DatastoreInfo{Kind: host.DatastoreUnknown}
 }
 
 // maskEndpoint는 "mysql://user:pass@tcp(host)/db"의 비밀번호를 가립니다.
@@ -100,12 +71,12 @@ func (s *System) Backup(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	host, _ := os.Hostname()
+	hostname, _ := os.Hostname()
 	stamp := s.now().Format("20060102-150405")
 	var path string
 	switch ds.Kind {
-	case DatastoreSQLite:
-		path = filepath.Join(dir, sqlitePrefix+host+"-"+stamp+".db")
+	case host.DatastoreSQLite:
+		path = filepath.Join(dir, sqlitePrefix+hostname+"-"+stamp+".db")
 		if err := BackupSQLite(ctx, ds.Path, path); err != nil {
 			return "", err
 		}
@@ -113,14 +84,14 @@ func (s *System) Backup(ctx context.Context) (string, error) {
 		if tok, err := s.Token(); err == nil {
 			_ = os.WriteFile(path+".token", []byte(tok+"\n"), 0o600)
 		}
-	case DatastoreEtcd:
+	case host.DatastoreEtcd:
 		name := etcdPrefix
 		out, err := s.k3s(ctx, "etcd-snapshot", "save", "--data-dir", s.DataDir(), "--dir", dir, "--name", name)
 		if err != nil {
 			return "", err
 		}
 		path = lastField(string(out))
-	case DatastoreExternal:
+	case host.DatastoreExternal:
 		return "", fmt.Errorf("외부 데이터스토어(%s)는 해당 DB의 백업 도구를 사용하세요", ds.Endpoint)
 	default:
 		return "", fmt.Errorf("데이터스토어를 찾을 수 없습니다 (data-dir: %s)", s.DataDir())
@@ -179,46 +150,22 @@ func CheckSQLite(ctx context.Context, path string) error {
 	return nil
 }
 
-// ListBackups는 백업 디렉터리의 백업 파일을 최신순으로 돌려줍니다.
-func (s *System) ListBackups() ([]BackupFile, error) {
-	entries, err := os.ReadDir(s.cfg.Backup.Dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+// ListBackups는 백업 디렉터리의 SQLite 백업과 etcd 스냅샷을 최신순으로 돌려줍니다.
+func (s *System) ListBackups() ([]host.BackupFile, error) {
+	sq, err := host.ListBackupFiles(s.cfg.Backup.Dir, host.DatastoreSQLite, sqlitePrefix, ".db", ".token")
 	if err != nil {
-		if errors.Is(err, os.ErrPermission) {
-			return nil, ErrNotRoot
-		}
 		return nil, err
 	}
-	var out []BackupFile
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || strings.HasSuffix(name, ".token") {
-			continue
-		}
-		var kind DatastoreKind
-		switch {
-		case strings.HasPrefix(name, sqlitePrefix) && strings.HasSuffix(name, ".db"):
-			kind = DatastoreSQLite
-		case strings.HasPrefix(name, etcdPrefix):
-			kind = DatastoreEtcd
-		default:
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		p := filepath.Join(s.cfg.Backup.Dir, name)
-		_, tokErr := os.Stat(p + ".token")
-		out = append(out, BackupFile{Name: name, Path: p, Size: info.Size(), Time: info.ModTime(), Kind: kind, HasToken: tokErr == nil})
+	et, err := host.ListBackupFiles(s.cfg.Backup.Dir, host.DatastoreEtcd, etcdPrefix, "", ".token")
+	if err != nil {
+		return nil, err
 	}
+	out := append(sq, et...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
 	return out, nil
 }
 
-func (s *System) prune(ctx context.Context, kind DatastoreKind) error {
+func (s *System) prune(ctx context.Context, kind host.DatastoreKind) error {
 	list, err := s.ListBackups()
 	if err != nil {
 		return err
@@ -243,8 +190,8 @@ func (s *System) DeleteBackup(ctx context.Context, name string) error {
 	if err := s.needRoot(); err != nil {
 		return err
 	}
-	if name != filepath.Base(name) || name == "" {
-		return fmt.Errorf("잘못된 파일 이름: %q", name)
+	if err := host.ValidBackupName(name); err != nil {
+		return err
 	}
 	p := filepath.Join(s.cfg.Backup.Dir, name)
 	if strings.HasPrefix(name, etcdPrefix) {
@@ -260,6 +207,18 @@ func (s *System) DeleteBackup(ctx context.Context, name string) error {
 	return nil
 }
 
+// RestoreGuide는 자동 복원을 지원하지 않는 경우(etcd)의 수동 복원 절차입니다.
+func (s *System) RestoreGuide(name string) string {
+	p := filepath.Join(s.cfg.Backup.Dir, name)
+	return "K3S embedded etcd 스냅샷 복원 절차 (모든 서버 노드에 영향이 있습니다)\n\n" +
+		"1. 모든 서버 노드에서 k3s를 중지합니다:  systemctl stop k3s\n" +
+		"2. 첫 번째 서버에서 클러스터를 스냅샷으로 초기화합니다:\n" +
+		"   k3s server --cluster-reset --cluster-reset-restore-path=" + p + " --data-dir " + s.DataDir() + "\n" +
+		"3. 완료 메시지가 나오면 k3s를 시작합니다:  systemctl start k3s\n" +
+		"4. 나머지 서버 노드는 " + s.DataDir() + "/server/db 를 지운 뒤 k3s를 시작해 다시 합류시킵니다.\n\n" +
+		"자세한 내용: https://docs.k3s.io/datastore/backup-restore\n"
+}
+
 // RestoreBackup은 SQLite 백업으로 데이터스토어를 되돌립니다.
 // 순서: 무결성 검사 → k3s 중지 → 현재 DB를 pre-restore로 이동 → 백업 복사 → k3s 시작.
 func (s *System) RestoreBackup(ctx context.Context, name string, progress func(string)) error {
@@ -270,7 +229,7 @@ func (s *System) RestoreBackup(ctx context.Context, name string, progress func(s
 		progress = func(string) {}
 	}
 	ds := s.Datastore()
-	if ds.Kind != DatastoreSQLite {
+	if ds.Kind != host.DatastoreSQLite {
 		return fmt.Errorf("자동 복원은 SQLite 데이터스토어만 지원합니다 (현재: %s). etcd는 'k3s server --cluster-reset --cluster-reset-restore-path=<파일>'을 사용하세요", ds.Kind)
 	}
 	if name != filepath.Base(name) || !strings.HasPrefix(name, sqlitePrefix) {
@@ -287,12 +246,12 @@ func (s *System) RestoreBackup(ctx context.Context, name string, progress func(s
 		}
 	}
 	progress("k3s 서비스 중지")
-	if err := s.ServiceControl(ctx, OpStop); err != nil {
+	if err := s.ServiceControl(ctx, host.OpStop); err != nil {
 		return err
 	}
 	restart := func() error {
 		progress("k3s 서비스 시작")
-		return s.ServiceControl(ctx, OpStart)
+		return s.ServiceControl(ctx, host.OpStart)
 	}
 	stamp := s.now().Format("20060102-150405")
 	progress("현재 DB 보관: state.db.pre-restore-" + stamp)
@@ -306,7 +265,7 @@ func (s *System) RestoreBackup(ctx context.Context, name string, progress func(s
 		}
 	}
 	progress("백업 복사")
-	if err := copyFile(src, ds.Path, 0o600); err != nil {
+	if err := host.CopyFile(src, ds.Path, 0o600); err != nil {
 		// 실패 시 원래 DB를 되돌립니다.
 		for _, suf := range []string{"", "-wal", "-shm"} {
 			_ = os.Rename(ds.Path+".pre-restore-"+stamp+suf, ds.Path+suf)
@@ -315,22 +274,4 @@ func (s *System) RestoreBackup(ctx context.Context, name string, progress func(s
 		return fmt.Errorf("백업 복사 실패 (원래 DB로 되돌림): %w", err)
 	}
 	return restart()
-}
-
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(dst)
-		return err
-	}
-	return out.Close()
 }

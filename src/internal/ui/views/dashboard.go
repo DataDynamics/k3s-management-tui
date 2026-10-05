@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/DataDynamics/k3s-management-tui/internal/config"
-	"github.com/DataDynamics/k3s-management-tui/internal/k3s"
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 	"github.com/DataDynamics/k3s-management-tui/internal/kube"
 )
 
@@ -286,7 +286,7 @@ func (d *Dashboard) hostLines() []string {
 	}
 	ds := hs.Datastore
 	dsTxt := string(ds.Kind)
-	if ds.Kind == k3s.DatastoreSQLite {
+	if ds.Kind == host.DatastoreSQLite {
 		dsTxt += " (" + kube.FormatBytes(ds.Size) + ")"
 	}
 	out = append(out, label("datastore")+dsTxt)

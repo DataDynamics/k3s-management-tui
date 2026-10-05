@@ -82,7 +82,8 @@ func TestShippedExamplesAreValid(t *testing.T) {
 	if len(cfg.Views) != len(examples) {
 		t.Errorf("예제 %d개 중 %d개만 적용됨", len(examples), len(cfg.Views))
 	}
-	for _, f := range []string{filepath.Join(confDir, "k3stui.yaml"), filepath.Join(confDir, "examples", "k3stui-k8s.yaml")} {
+	for _, f := range []string{filepath.Join(confDir, "k3stui.yaml"), filepath.Join(confDir, "examples", "k3stui-k8s.yaml"),
+		filepath.Join(confDir, "examples", "k3stui-kubeadm.yaml")} {
 		c, err := config.Load(f)
 		if err != nil {
 			t.Errorf("%s: %v", f, err)

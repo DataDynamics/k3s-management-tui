@@ -10,16 +10,27 @@ cluster:
   #        → /etc/rancher/rke2/rke2.yaml → /etc/kubernetes/admin.conf 순서로 쓸 수 있는 파일을 찾습니다.
   kubeconfig: ""
   context: ""                       # 비우면 kubeconfig의 current-context (--context로도 지정 가능)
-  # Host 탭(서비스 제어·config.yaml·백업 등): auto | enabled | disabled
-  # auto는 K3S이고 API 서버가 이 호스트에 있을 때만 켭니다.
+  # Host 탭(서비스 제어·설정 편집·백업 등): auto | enabled | disabled
+  # auto는 K3S 또는 kubeadm 노드이고 API 서버가 이 호스트에 있을 때만 켭니다.
   host_management: auto
 
-# 아래 k3s 항목은 Host 탭(로컬 K3S 관리)에서만 씁니다.
+# 아래 k3s 항목은 K3S 노드의 Host 탭에서만 씁니다.
 k3s:
   config_file: /etc/rancher/k3s/config.yaml
   service_name: k3s                 # agent 노드면 k3s-agent
   binary: /usr/local/bin/k3s
   data_dir: auto                    # auto = config.yaml의 data-dir 사용, 없으면 /var/lib/rancher/k3s
+
+# 아래 kubeadm 항목은 kubeadm 노드의 Host 탭에서만 씁니다. 표준 설치라면 바꿀 필요가 없습니다.
+kubeadm:
+  service_name: kubelet             # 노드 서비스 (systemd 유닛)
+  kubernetes_dir: /etc/kubernetes   # manifests/, pki/, admin.conf가 있는 디렉터리
+  kubelet_config: /var/lib/kubelet/config.yaml       # KubeletConfiguration (설정 하위 탭에서 편집)
+  kubelet_flags: /var/lib/kubelet/kubeadm-flags.env  # --root-dir, --container-runtime-endpoint를 여기서 읽습니다
+  binary: kubeadm                   # 인증서 갱신·노드 추가 토큰에 씁니다
+  kubelet: kubelet                  # 버전 확인용
+  crictl: crictl                    # 런타임 소켓은 kubelet 설정에서 자동으로 찾습니다
+  etcdctl: etcdctl                  # 호스트에 없으면 etcd 컨테이너 안의 etcdctl로 스냅샷을 만듭니다
 
 ui:
   refresh_interval: 2s              # 메트릭·호스트 상태·AGE 갱신 주기 (리소스 목록은 watch로 즉시 반영)
@@ -36,7 +47,10 @@ safety:
   protected_namespaces: [kube-system, kube-public, kube-node-lease]
 
 backup:
-  dir: /data2/k3stui-backups        # 데이터스토어(SQLite/etcd) 백업 위치
+  # 데이터스토어 백업 위치 (K3S: SQLite·etcd, kubeadm: etcd 스냅샷 + PKI 압축본).
+  # config/, manifests/ 하위 디렉터리에는 설정·static Pod 편집 전 백업도 저장합니다.
+  # kubeadm에서는 /etc/kubernetes/manifests 안을 지정하면 안 됩니다 (kubelet이 백업을 Pod로 띄웁니다).
+  dir: /data2/k3stui-backups
   keep: 7                           # 보관 개수 (넘으면 오래된 것부터 삭제)
 
 portforward:

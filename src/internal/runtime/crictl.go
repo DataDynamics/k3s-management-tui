@@ -1,4 +1,4 @@
-// Package runtime은 K3S 내장 containerd를 crictl로 조회합니다 (k3s crictl ...).
+// Package runtime은 노드의 컨테이너 런타임을 crictl로 조회합니다 (K3S: k3s crictl, kubeadm: crictl).
 package runtime
 
 import (
@@ -13,10 +13,11 @@ import (
 	"github.com/DataDynamics/k3s-management-tui/internal/executil"
 )
 
-// Crictl은 `k3s crictl` 래퍼입니다. K3S가 containerd 소켓 경로를 알아서 지정합니다.
+// Crictl은 crictl 래퍼입니다. Command는 배포판별 실행 명령 앞부분입니다
+// (예: [k3s crictl], [crictl --runtime-endpoint unix:///run/containerd/containerd.sock]).
 type Crictl struct {
-	Binary string // k3s 바이너리
-	Run    executil.Runner
+	Command []string
+	Run     executil.Runner
 }
 
 // Container는 crictl ps 결과 한 줄입니다.
@@ -41,7 +42,10 @@ type Image struct {
 }
 
 func (c *Crictl) crictl(ctx context.Context, args ...string) ([]byte, error) {
-	return c.Run.Run(ctx, c.Binary, append([]string{"crictl"}, args...)...)
+	if len(c.Command) == 0 {
+		return nil, fmt.Errorf("crictl 명령이 설정되지 않았습니다")
+	}
+	return c.Run.Run(ctx, c.Command[0], append(append([]string{}, c.Command[1:]...), args...)...)
 }
 
 // Containers는 모든 컨테이너(종료된 것 포함)를 돌려줍니다.
@@ -198,7 +202,11 @@ func (c *Crictl) Logs(ctx context.Context, id string, tail int) (string, error) 
 	// crictl logs는 컨테이너 stderr를 stderr로 내보내므로 Runner 대신 결합 출력을 씁니다.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	ch, err := executil.Stream(ctx, nil, c.Binary, "crictl", "logs", "--tail", strconv.Itoa(tail), id)
+	if len(c.Command) == 0 {
+		return "", fmt.Errorf("crictl 명령이 설정되지 않았습니다")
+	}
+	args := append(append([]string{}, c.Command[1:]...), "logs", "--tail", strconv.Itoa(tail), id)
+	ch, err := executil.Stream(ctx, nil, c.Command[0], args...)
 	if err != nil {
 		return "", err
 	}

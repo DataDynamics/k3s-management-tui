@@ -1,0 +1,61 @@
+# k3stui 설정 예제 — kubeadm 컨트롤 플레인 노드용
+#
+# kubeadm으로 만든 클러스터의 컨트롤 플레인 노드에서 root로 실행할 때의 설정입니다.
+# 리소스 관리에 더해 Host 탭에서 다음 노드 관리 기능을 씁니다.
+#   - kubelet 서비스 상태·로그·재시작
+#   - kubelet 설정(/var/lib/kubelet/config.yaml) 보기·편집
+#   - static Pod(/etc/kubernetes/manifests) 보기·편집 — 저장하면 kubelet이 Pod를 다시 만듭니다
+#   - PKI·kubeconfig 인증서 만료 확인, 'kubeadm certs renew all' + 컨트롤 플레인 재시작
+#   - 로컬 etcd 스냅샷 백업 (+ PKI 압축본), 복원 절차 안내
+#   - 워커 노드 추가 명령 ('kubeadm token create --print-join-command')
+#   - containerd 컨테이너·이미지 (crictl)
+#
+# 워커 노드에서도 실행할 수 있지만, API 서버가 원격이므로 auto에서는 Host 탭이 꺼집니다.
+# 워커의 kubelet만 관리하려면 cluster.host_management: enabled로 두세요 (인증서 갱신·백업·노드 추가는 컨트롤 플레인 전용).
+#
+# 사용 방법:
+#   sudo k3stui --config conf/examples/k3stui-kubeadm.yaml
+#   또는 설치본의 conf/k3stui.yaml을 이 내용으로 바꿉니다.
+
+cluster:
+  distribution: auto                # kube-system/kubeadm-config ConfigMap이 있으면 kubeadm으로 판별합니다
+  kubeconfig: ""                    # 비우면 자동 탐색합니다. 노드에서는 보통 /etc/kubernetes/admin.conf를 고릅니다
+  context: ""
+  host_management: auto             # kubeadm 노드이고 API 서버가 이 호스트에 있으면 Host 탭을 켭니다
+
+kubeadm:
+  service_name: kubelet
+  kubernetes_dir: /etc/kubernetes
+  kubelet_config: /var/lib/kubelet/config.yaml
+  kubelet_flags: /var/lib/kubelet/kubeadm-flags.env
+  binary: kubeadm
+  kubelet: kubelet
+  crictl: crictl
+  # 호스트에 etcdctl이 없으면 실행 중인 etcd 컨테이너 안의 etcdctl을 씁니다.
+  # 이때 스냅샷을 etcd 데이터 디렉터리에 잠시 만들었다가 백업 위치로 옮깁니다.
+  etcdctl: etcdctl
+
+backup:
+  # etcd 스냅샷(kubeadm-etcd-<호스트>-<시각>.db)과 PKI 압축본(.pki.tar.gz)을 저장합니다.
+  # 편집 전 kubelet 설정은 config/, static Pod는 manifests/ 아래에 백업합니다.
+  # /etc/kubernetes/manifests 안을 지정하면 거부합니다 (kubelet이 백업 파일을 Pod로 띄우기 때문입니다).
+  dir: /var/backups/k3stui
+  keep: 7
+
+safety:
+  read_only: false
+  confirm_destructive: true
+  protected_namespaces: [kube-system, kube-public, kube-node-lease]
+
+tools:
+  kubectl: ""                       # 비우면 PATH의 kubectl
+  helm: helm
+  editor: ""                        # 비우면 $EDITOR → $VISUAL → vi. 노드에 편집기가 있는지 --check로 확인하세요
+  timeout: 30s
+
+logging:
+  file: /var/log/k3stui/k3stui.log
+  level: info
+
+audit:
+  file: /var/log/k3stui/audit.log

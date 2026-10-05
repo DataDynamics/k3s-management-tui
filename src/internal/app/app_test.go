@@ -13,7 +13,7 @@ import (
 	"github.com/DataDynamics/k3s-management-tui/internal/audit"
 	"github.com/DataDynamics/k3s-management-tui/internal/config"
 	"github.com/DataDynamics/k3s-management-tui/internal/helm"
-	"github.com/DataDynamics/k3s-management-tui/internal/k3s"
+	"github.com/DataDynamics/k3s-management-tui/internal/host"
 	"github.com/DataDynamics/k3s-management-tui/internal/kube"
 	"github.com/DataDynamics/k3s-management-tui/internal/runtime"
 	"github.com/DataDynamics/k3s-management-tui/internal/ui/components"
@@ -27,18 +27,43 @@ func (failRunner) Run(context.Context, string, ...string) ([]byte, error) {
 	return nil, errors.New("테스트: 외부 명령 없음")
 }
 
-// fakeHost는 실제 서버를 건드리지 않는 Host 구현입니다 (설계 7.3).
+// fakeHost는 실제 서버를 건드리지 않는 host.Host 구현입니다 (설계 7.3).
 type fakeHost struct {
-	root bool
-	ops  []k3s.ServiceOp
+	root   bool
+	distro string
+	ops    []host.ServiceOp
+	joins  int
 }
 
-func (f *fakeHost) IsRoot() bool        { return f.root }
-func (f *fakeHost) ServiceName() string { return "k3s" }
-func (f *fakeHost) ServiceStatus(context.Context) (k3s.ServiceStatus, error) {
-	return k3s.ServiceStatus{Unit: "k3s", ActiveState: "active", SubState: "running", Since: time.Now().Add(-time.Hour), MemoryBytes: 1 << 30}, nil
+var _ host.Host = (*fakeHost)(nil)
+
+func (f *fakeHost) Distro() string {
+	if f.distro == "" {
+		return "k3s"
+	}
+	return f.distro
 }
-func (f *fakeHost) ServiceControl(_ context.Context, op k3s.ServiceOp) error {
+func (f *fakeHost) Caps() host.Capabilities {
+	c := host.Capabilities{CheckLabel: "check-config", ConfigLabel: "config.yaml", ConfigRestartService: true,
+		ManifestsLabel: "Manifests", ManifestSkip: true, CertRotateHint: "rotate", Backup: true, Restore: true,
+		BackupExtra: "TOKEN", JoinLabel: "노드 추가 명령"}
+	if f.distro == "kubeadm" {
+		c.ConfigLabel, c.ManifestsLabel, c.ManifestSkip, c.ManifestEdit = "kubelet config", "Static Pods", false, true
+		c.Restore, c.BackupExtra, c.JoinMutates = false, "PKI", true
+	}
+	return c
+}
+func (f *fakeHost) IsRoot() bool { return f.root }
+func (f *fakeHost) ServiceName() string {
+	if f.distro == "kubeadm" {
+		return "kubelet"
+	}
+	return "k3s"
+}
+func (f *fakeHost) ServiceStatus(context.Context) (host.ServiceStatus, error) {
+	return host.ServiceStatus{Unit: f.ServiceName(), ActiveState: "active", SubState: "running", Since: time.Now().Add(-time.Hour), MemoryBytes: 1 << 30}, nil
+}
+func (f *fakeHost) ServiceControl(_ context.Context, op host.ServiceOp) error {
 	f.ops = append(f.ops, op)
 	return nil
 }
@@ -48,31 +73,45 @@ func (f *fakeHost) StreamJournal(context.Context, int, bool) (<-chan string, err
 	close(ch)
 	return ch, nil
 }
-func (f *fakeHost) Version(context.Context) (string, error)     { return "k3s version v1.36.5+k3s1", nil }
+func (f *fakeHost) Version(context.Context) (string, error)     { return "v1.36.5", nil }
 func (f *fakeHost) CheckConfig(context.Context) (string, error) { return "ok", nil }
 func (f *fakeHost) ConfigPath() string                          { return "/etc/rancher/k3s/config.yaml" }
-func (f *fakeHost) LoadConfig() (*k3s.K3sConfig, error) {
-	return &k3s.K3sConfig{Values: map[string]any{"data-dir": "/data2/k3s"}}, nil
+func (f *fakeHost) LoadConfig() (*host.Config, error) {
+	return &host.Config{Values: map[string]any{"data-dir": "/data2/k3s"}}, nil
 }
+func (f *fakeHost) ValidateConfig([]byte) error        { return nil }
 func (f *fakeHost) WriteConfig([]byte) (string, error) { return "/tmp/backup", nil }
 func (f *fakeHost) DataDir() string                    { return "/data2/k3s" }
 func (f *fakeHost) KubeletDir() string                 { return "/var/lib/kubelet" }
-func (f *fakeHost) Datastore() k3s.DatastoreInfo {
-	return k3s.DatastoreInfo{Kind: k3s.DatastoreSQLite, Path: "/data2/k3s/server/db/state.db", Size: 1 << 20}
+func (f *fakeHost) Datastore() host.DatastoreInfo {
+	return host.DatastoreInfo{Kind: host.DatastoreSQLite, Path: "/data2/k3s/server/db/state.db", Size: 1 << 20}
 }
 func (f *fakeHost) Backup(context.Context) (string, error) { return "/backups/b.db", nil }
-func (f *fakeHost) ListBackups() ([]k3s.BackupFile, error) {
-	return []k3s.BackupFile{{Name: "k3s-sqlite-x.db", Kind: k3s.DatastoreSQLite, Time: time.Now()}}, nil
+func (f *fakeHost) ListBackups() ([]host.BackupFile, error) {
+	kind := host.DatastoreSQLite
+	if f.distro == "kubeadm" {
+		kind = host.DatastoreEtcd
+	}
+	return []host.BackupFile{{Name: "backup-x.db", Kind: kind, Time: time.Now()}}, nil
 }
 func (f *fakeHost) DeleteBackup(context.Context, string) error                { return nil }
 func (f *fakeHost) RestoreBackup(context.Context, string, func(string)) error { return nil }
-func (f *fakeHost) Manifests() ([]k3s.Manifest, error)                        { return nil, nil }
-func (f *fakeHost) SetManifestSkip(string, bool) error                        { return nil }
-func (f *fakeHost) Certificates() ([]k3s.CertInfo, error)                     { return nil, nil }
-func (f *fakeHost) RotateCertificates(context.Context, func(string)) error    { return nil }
-func (f *fakeHost) Token() (string, error)                                    { return "K10token", nil }
-func (f *fakeHost) DiskUsage() []k3s.DiskInfo                                 { return nil }
-func (f *fakeHost) ReadFile(string) (string, error)                           { return "data-dir: /data2/k3s\n", nil }
+func (f *fakeHost) RestoreGuide(name string) string                           { return "복원 절차: " + name }
+func (f *fakeHost) ManifestsDir() string                                      { return "/etc/kubernetes/manifests" }
+func (f *fakeHost) Manifests() ([]host.Manifest, error) {
+	return []host.Manifest{{Path: "/etc/kubernetes/manifests/etcd.yaml", Rel: "etcd.yaml"}}, nil
+}
+func (f *fakeHost) SetManifestSkip(string, bool) error                     { return nil }
+func (f *fakeHost) WriteManifest(string, []byte) (string, error)           { return "/tmp/m", nil }
+func (f *fakeHost) Certificates() ([]host.CertInfo, error)                 { return nil, nil }
+func (f *fakeHost) RotateCertificates(context.Context, func(string)) error { return nil }
+func (f *fakeHost) JoinCommand(context.Context, string) (string, error) {
+	f.joins++
+	return "kubeadm join 10.0.0.1:6443 --token abc", nil
+}
+func (f *fakeHost) DiskUsage() []host.DiskInfo      { return nil }
+func (f *fakeHost) ReadFile(string) (string, error) { return "data-dir: /data2/k3s\n", nil }
+func (f *fakeHost) CrictlCommand() []string         { return []string{"crictl"} }
 
 func newTestModel(t *testing.T, root bool) (*Model, *fakeHost, *bytes.Buffer) {
 	t.Helper()
@@ -87,18 +126,21 @@ func newTestModelWith(t *testing.T, root bool, setup func(*views.Env)) (*Model, 
 	cfg.Keys = config.DefaultKeybindings()
 	cfg.Theme, _ = config.LoadTheme("", "dark")
 	cfg.Views = config.ViewOverrides{}
-	host := &fakeHost{root: root}
+	fh := &fakeHost{root: root}
 	var auditBuf bytes.Buffer
 	env := &views.Env{
-		Cfg: cfg, Styles: styles.New(cfg.Theme), Metrics: kube.NewMetrics(), Host: host,
+		Cfg: cfg, Styles: styles.New(cfg.Theme), Metrics: kube.NewMetrics(), Host: fh,
 		Audit: audit.NewWriter(&auditBuf), KubeErr: errors.New("테스트: 클러스터 없음"),
 		Helm:   &helm.Client{Binary: "helm", Run: failRunner{}},
-		Crictl: &runtime.Crictl{Binary: "k3s", Run: failRunner{}},
+		Crictl: &runtime.Crictl{Command: []string{"crictl"}, Run: failRunner{}},
 	}
 	setup(env)
+	if !env.HostEnabled {
+		env.Host = nil
+	}
 	m := New(env)
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	return m, host, &auditBuf
+	return m, fh, &auditBuf
 }
 
 // run은 명령을 실행해 나온 메시지를 모델에 다시 넣습니다. 오래 걸리는 명령(tick 등)은 건너뜁니다.
@@ -181,16 +223,17 @@ func TestActionKeysDoNotShadowGlobalKeys(t *testing.T) {
 		reserved[string(rune('0'+i))] = "tab"
 	}
 	check := func(where string, acts []*views.Action) {
-		seen := map[string]string{}
+		seen := map[string]*views.Action{}
 		for _, a := range acts {
 			for _, k := range kb.ActionKeys(a.ID, a.Keys) {
 				if g, ok := reserved[k]; ok {
 					t.Errorf("%s: 작업 %s의 키 %q가 전역 키 %s와 겹침", where, a.ID, k, g)
 				}
-				if prev, ok := seen[k]; ok && prev != a.ID {
-					t.Errorf("%s: 키 %q가 %s와 %s에 중복", where, k, prev, a.ID)
+				// 같은 키를 쓰더라도 두 작업 모두 Available로 행마다 하나만 고르게 했다면 허용합니다 (복원/복원 안내).
+				if prev, ok := seen[k]; ok && prev.ID != a.ID && (prev.Available == nil || a.Available == nil) {
+					t.Errorf("%s: 키 %q가 %s와 %s에 중복", where, k, prev.ID, a.ID)
 				}
-				seen[k] = a.ID
+				seen[k] = a
 			}
 		}
 	}
@@ -204,8 +247,10 @@ func TestActionKeysDoNotShadowGlobalKeys(t *testing.T) {
 				check(tab.def.Name+"/"+d.Key, s.Actions())
 			}
 		}
-		for _, s := range views.HostSources() {
-			check("Host/"+s.Key(), s.Actions())
+	}
+	for _, d := range []string{"k3s", "kubeadm"} {
+		for _, s := range views.HostSources(&fakeHost{root: true, distro: d}) {
+			check("Host("+d+")/"+s.Key(), s.Actions())
 		}
 	}
 	for _, d := range kube.Defs() {
@@ -236,15 +281,15 @@ func TestReadOnlyBlocksMutatingActions(t *testing.T) {
 }
 
 func TestNeedRootBlocks(t *testing.T) {
-	m, host, _ := newTestModel(t, false)
+	m, fh, _ := newTestModel(t, false)
 	a := &views.Action{ID: "service_restart", Label: "재시작", Mutating: true, NeedRoot: true, NoRow: true,
 		Do: func(env *views.Env, _ views.Row, _ string) (string, error) {
-			return "", env.Host.ServiceControl(context.Background(), k3s.OpRestart)
+			return "", env.Host.ServiceControl(context.Background(), host.OpRestart)
 		}}
 	_, cmd := m.Update(views.ActionRequestMsg{Action: a, Source: "service"})
 	run(t, m, cmd, 0)
-	if len(host.ops) != 0 || !strings.Contains(m.toast, "root") {
-		t.Errorf("root 아님 차단 실패: ops=%v toast=%q", host.ops, m.toast)
+	if len(fh.ops) != 0 || !strings.Contains(m.toast, "root") {
+		t.Errorf("root 아님 차단 실패: ops=%v toast=%q", fh.ops, m.toast)
 	}
 }
 
@@ -330,7 +375,7 @@ func TestPromptStagePassesInput(t *testing.T) {
 }
 
 func TestHostTabServiceRestartFlow(t *testing.T) {
-	m, host, auditBuf := newTestModel(t, true)
+	m, fh, auditBuf := newTestModel(t, true)
 	for i, tab := range m.tabs {
 		if tab.def.Key == "host" {
 			run(t, m, m.activateTab(i), 0)
@@ -347,8 +392,8 @@ func TestHostTabServiceRestartFlow(t *testing.T) {
 	typeText(t, m, "k3s")
 	_, cmd = m.Update(key("enter"))
 	run(t, m, cmd, 0)
-	if len(host.ops) != 1 || host.ops[0] != k3s.OpRestart {
-		t.Errorf("재시작 호출: %v", host.ops)
+	if len(fh.ops) != 1 || fh.ops[0] != host.OpRestart {
+		t.Errorf("재시작 호출: %v", fh.ops)
 	}
 	if !strings.Contains(auditBuf.String(), "service_restart") {
 		t.Errorf("감사 로그: %s", auditBuf.String())
@@ -396,7 +441,7 @@ func TestCommandModeAndQuit(t *testing.T) {
 }
 
 func TestRemoteClusterHidesHostFeatures(t *testing.T) {
-	m, host, _ := newTestModelWith(t, true, func(env *views.Env) {
+	m, fh, _ := newTestModelWith(t, true, func(env *views.Env) {
 		env.Distro, env.LocalAPI, env.HostEnabled = "eks", false, false
 		env.HostReason = "API 서버가 원격에 있습니다 (https://example.eks.amazonaws.com)"
 		env.Cfg.Cluster.Kubeconfig, env.Cfg.Cluster.KubeconfigSource = "/home/u/.kube/config", "~/.kube/config"
@@ -424,7 +469,7 @@ func TestRemoteClusterHidesHostFeatures(t *testing.T) {
 	if cmd := m.pollHost(true); cmd != nil {
 		t.Error("호스트 관리가 꺼져 있으면 호스트 상태를 조회하면 안 됨")
 	}
-	_ = host
+	_ = fh
 	// :host, :journal은 없는 기능으로 안내합니다.
 	_, cmd := m.Update(key(":"))
 	run(t, m, cmd, 0)
@@ -441,5 +486,85 @@ func TestRemoteClusterHidesHostFeatures(t *testing.T) {
 	run(t, m, help.Init(), 0)
 	if !strings.Contains(m.render(), "1 ~ 6") {
 		t.Errorf("도움말 탭 번호:\n%s", m.render())
+	}
+}
+
+func TestKubeadmHostTab(t *testing.T) {
+	kh := &fakeHost{root: true, distro: "kubeadm"}
+	m, _, auditBuf := newTestModelWith(t, true, func(env *views.Env) {
+		env.Distro, env.LocalAPI, env.HostEnabled, env.Host = "kubeadm", true, true, kh
+	})
+	for i, tab := range m.tabs {
+		if tab.def.Key == "host" {
+			run(t, m, m.activateTab(i), 0)
+		}
+	}
+	out := m.render()
+	for _, want := range []string{"kubelet config", "Static Pods", "Backups", "kubelet.service"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("kubeadm Host 탭에 %q가 없음:\n%s", want, out)
+		}
+	}
+	// J: 노드 추가 명령은 토큰을 새로 만들므로 확인을 거칩니다.
+	_, cmd := m.Update(key("J"))
+	run(t, m, cmd, 0)
+	if m.dialog == nil || kh.joins != 0 {
+		t.Fatal("노드 추가 명령은 확인 다이얼로그가 먼저 떠야 함")
+	}
+	_, cmd = m.Update(key("y"))
+	run(t, m, cmd, 0)
+	if kh.joins != 1 || !strings.Contains(m.render(), "kubeadm join") {
+		t.Errorf("join 실행 결과 (joins=%d):\n%s", kh.joins, m.render())
+	}
+	if !strings.Contains(auditBuf.String(), "join.token.create") {
+		t.Errorf("감사 로그: %s", auditBuf.String())
+	}
+	m.Update(key("q"))
+	// Backups 하위 탭에서 R은 복원 안내를 엽니다 (자동 복원 없음).
+	tp := m.page().(*views.TablePage)
+	tp.SelectSource("backups")
+	run(t, m, tp.Init(), 0)
+	_, cmd = m.Update(key("R"))
+	run(t, m, cmd, 0)
+	if m.dialog != nil || !strings.Contains(m.render(), "복원 절차: backup-x.db") {
+		t.Errorf("복원 안내 화면 (dialog=%v):\n%s", m.dialog != nil, m.render())
+	}
+}
+
+// 비동기 로딩 중에 하위 탭을 바꿔도 새 하위 탭이 "불러오는 중"에 멈추지 않아야 합니다.
+func TestSwitchSourceWhileLoading(t *testing.T) {
+	m, _, _ := newTestModel(t, true)
+	for i, tab := range m.tabs {
+		if tab.def.Key == "host" {
+			m.active = i
+			m.tabs[i].inited = true
+		}
+	}
+	tp := m.page().(*views.TablePage)
+	pending := tp.Init() // Service 로딩 시작 (결과는 아직 전달하지 않음)
+	if pending == nil {
+		t.Fatal("비동기 로딩 명령이 있어야 함")
+	}
+	_, cmd := m.Update(key("]"))
+	run(t, m, cmd, 0)
+	if strings.Contains(m.render(), "불러오는 중") {
+		t.Errorf("하위 탭을 바꾼 뒤 새 소스를 읽지 못함:\n%s", m.render())
+	}
+	// 늦게 도착한 이전 결과는 무시되어야 합니다.
+	run(t, m, pending, 0)
+	if !strings.Contains(m.render(), "config.yaml") {
+		t.Errorf("이전 소스 결과가 현재 화면을 덮어씀:\n%s", m.render())
+	}
+}
+
+func TestNoRowActionAuditTarget(t *testing.T) {
+	m, _, auditBuf := newTestModel(t, true)
+	called := 0
+	a := testAction(&called, views.ConfirmNone)
+	a.NoRow = true
+	_, cmd := m.Update(views.ActionRequestMsg{Action: a, Row: views.Row{Name: "/var/lib/kubelet/pki/kubelet.crt"}, Source: "certs"})
+	run(t, m, cmd, 0)
+	if called != 1 || !strings.Contains(auditBuf.String(), `"target":"certs"`) {
+		t.Errorf("행과 무관한 작업의 감사 대상은 소스 이름이어야 함: %s", auditBuf.String())
 	}
 }

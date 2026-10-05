@@ -5,7 +5,8 @@ K3S 서버를 터미널 하나에서 관리하는 TUI입니다.
 k9s처럼 Kubernetes 리소스를 다루는 기능에 더해, 일반 도구가 다루지 않는 **K3S 호스트 쪽 관리 기능**을 함께 제공합니다.
 systemd 서비스 제어, `config.yaml` 편집, 데이터스토어 백업·복원, 자동 배포 manifest, 인증서, containerd 이미지·컨테이너를 한 화면에서 관리할 수 있습니다.
 
-K3S가 아닌 Kubernetes(kubeadm, RKE2, EKS, GKE 등)에도 붙일 수 있습니다. 이때는 호스트 관리 기능을 빼고 리소스 관리 기능만 제공합니다.
+**kubeadm** 노드에서는 같은 Host 탭으로 kubelet, static Pod, PKI 인증서, etcd 스냅샷, 노드 추가 토큰을 관리합니다.
+그 밖의 Kubernetes(RKE2, EKS, GKE, 원격 클러스터 등)에도 붙일 수 있으며, 이때는 호스트 관리 기능을 빼고 리소스 관리 기능만 제공합니다.
 자세한 내용은 [다른 Kubernetes 클러스터에서 사용](#다른-kubernetes-클러스터에서-사용)을 참고하세요.
 
 - 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
@@ -80,7 +81,10 @@ local-path 저장 경로의 실제 디스크 사용량을 PVC별로 계산합니
 
 ![Config - ConfigMaps](docs/images/config-configmaps.png)
 
-### Host (K3S 관리)
+### Host (노드 관리)
+
+아래는 K3S 노드 화면입니다. kubeadm 노드에서는 같은 자리에 kubelet 서비스, kubelet config, Static Pods, PKI 인증서, etcd 스냅샷이 나옵니다
+(「[kubeadm 노드 관리](#kubeadm-노드-관리)」 참고).
 
 k3s 서비스 상태, 버전, API 서버 상태, 데이터스토어, 디스크 사용량을 보여주고 서비스를 제어합니다.
 
@@ -131,6 +135,7 @@ k3s 서비스 상태, 버전, API 서버 상태, 데이터스토어, 디스크 �
 ## 요구 사항
 
 - K3S 노드에서 호스트 관리까지 쓰려면: K3S가 설치된 Linux 서버(systemd 사용)와 root 권한이 필요합니다 (K3S kubeconfig는 기본 권한이 `0600`입니다).
+- kubeadm 노드에서 호스트 관리까지 쓰려면: kubeadm·kubelet·crictl이 있는 노드와 root 권한이 필요합니다. etcdctl은 없어도 됩니다 (etcd 컨테이너 안의 것을 씁니다).
 - 다른 Kubernetes 클러스터에 붙이려면: 접속할 수 있는 kubeconfig와 `kubectl`만 있으면 됩니다.
 - 빌드할 때만 Go 1.27 이상이 필요합니다. 실행 파일은 정적 바이너리 하나입니다.
 - 선택: `helm`(Helm 탭), metrics-server(CPU·메모리 표시, K3S에 기본 포함)
@@ -144,14 +149,15 @@ sudo bin/k3stui           # 저장소에서 바로 실행 (conf/ 자동 인식)
 ```
 
 `--check`는 kubeconfig, API 서버, 배포판, metrics-server, helm, kubectl을 점검하고,
-호스트 관리가 켜져 있으면 root 권한, k3s 서비스, data-dir, 데이터스토어까지 확인해 다음과 같이 보여줍니다.
+호스트 관리가 켜져 있으면 root 권한, 노드 서비스(k3s 또는 kubelet), 버전, 노드 디렉터리, 설정 파일, 데이터스토어까지 확인해 다음과 같이 보여줍니다.
 
 ```
 [OK  ] kubeconfig      /etc/rancher/k3s/k3s.yaml (K3S 기본 경로)
 [OK  ] API 서버        v1.36.5+k3s1  https://127.0.0.1:6443 (context: default)
 [OK  ] 배포판          K3S (API 서버: 로컬)
-[OK  ] k3s 서비스      k3s.service active/running
-[OK  ] data-dir        /data2/k3s
+[OK  ] 호스트 관리     K3S
+[OK  ] 서비스          k3s.service active/running
+[OK  ] 노드 디렉터리   /data2/k3s
 [OK  ] 데이터스토어    sqlite /data2/k3s/server/db/state.db
 ```
 
@@ -220,7 +226,8 @@ k3stui는 시작할 때 배포판과 API 서버 위치를 판별해 동작 모�
 | 상황 | 동작 |
 |---|---|
 | K3S 서버 노드에서 실행 (API 서버가 이 호스트) | 모든 기능을 씁니다. 탭은 7개(Host 포함)입니다 |
-| 원격 K3S, kubeadm, RKE2, EKS, GKE 등 | Host 탭과 대시보드 호스트 패널을 숨기고, 대시보드 오른쪽에 연결 정보(배포판·context·API 서버·kubeconfig)를 보여줍니다. 탭은 6개입니다 |
+| kubeadm 컨트롤 플레인 노드에서 실행 | 모든 기능을 씁니다. Host 탭은 kubeadm용으로 구성됩니다 (아래 「kubeadm 노드 관리」) |
+| 원격 K3S·kubeadm, RKE2, EKS, GKE 등 | Host 탭과 대시보드 호스트 패널을 숨기고, 대시보드 오른쪽에 연결 정보(배포판·context·API 서버·kubeconfig)를 보여줍니다. 탭은 6개입니다 |
 
 - **배포판 판별**: API 서버 버전(`+k3s`, `+rke2`, `-eks-`, `-gke.`)을 보고, 알 수 없으면 `kube-system/kubeadm-config` ConfigMap이 있는지로 kubeadm을 확인합니다. 그래도 모르면 일반 Kubernetes로 봅니다.
 - **로컬 판별**: API 서버 주소가 루프백이거나 이 호스트의 네트워크 인터페이스 IP이면 로컬로 봅니다.
@@ -245,7 +252,29 @@ sudo k3stui --distribution kubernetes                           # K3S 노드지�
 ```
 
 호스트 관리 사용 여부는 설정 파일의 `cluster.host_management`(`auto`, `enabled`, `disabled`)로 바꿀 수 있습니다.
-kubeadm 노드의 호스트 관리(kubelet, `/etc/kubernetes/manifests`, `kubeadm certs`, etcd 스냅샷)는 아직 지원하지 않습니다.
+RKE2 노드의 호스트 관리는 아직 지원하지 않습니다.
+
+### kubeadm 노드 관리
+
+kubeadm 컨트롤 플레인 노드에서 root로 실행하면 Host 탭이 다음처럼 구성됩니다. 설정 예제는 [conf/examples/k3stui-kubeadm.yaml](conf/examples/k3stui-kubeadm.yaml)에 있습니다.
+
+| 하위 탭 | 내용 | 작업 키 |
+|---|---|---|
+| Service | kubelet 서비스 상태, kubeadm·kubelet 버전, API 서버 상태, etcd 데이터 경로, 디스크 사용량 | `l` kubelet 로그, `r` 재시작, `t` 중지, `a` 시작, `c` `kubeadm certs check-expiration`, `J` 노드 추가 명령 |
+| kubelet config | `/var/lib/kubelet/config.yaml` (KubeletConfiguration) | `v` 보기, `e` 편집 (kind 검증 → diff → 백업 → kubelet 재시작 질의) |
+| Static Pods | `/etc/kubernetes/manifests`의 kube-apiserver, etcd 등 | `v` 보기, `e` 편집 (Pod 검증 → diff → 백업 후 저장, kubelet이 Pod를 다시 만듭니다) |
+| Certificates | `pki/`, `pki/etcd/`, admin.conf 등 kubeconfig 안의 클라이언트 인증서, kubelet 인증서 | `v` 상세, `R` `kubeadm certs renew all` 후 컨트롤 플레인 재시작 |
+| Backups | etcd 스냅샷과 PKI 압축본 | `b` 지금 백업, `R` 복원 절차 안내, `x` 삭제 |
+| Containers, Images | `crictl` (런타임 소켓은 kubelet 설정에서 자동으로 찾습니다) | K3S와 같습니다 |
+
+동작 방식과 주의할 점:
+
+- **etcd 스냅샷**: 호스트에 `etcdctl`이 있으면 그것을, 없으면 실행 중인 etcd 컨테이너 안의 `etcdctl`을 씁니다. 스냅샷과 함께 `/etc/kubernetes/pki`를 `<백업>.pki.tar.gz`로 저장합니다.
+- **etcd 복원**: static Pod를 내리고 데이터 디렉터리를 바꾸는 위험한 절차라 자동으로 하지 않습니다. `R`을 누르면 해당 스냅샷 경로가 들어간 단계별 명령을 보여줍니다.
+- **static Pod 편집**: 저장 전 원본을 `<backup.dir>/manifests/`에 백업합니다. 백업 위치가 manifests 디렉터리 안이면 kubelet이 백업까지 Pod로 띄우므로 저장을 거부합니다.
+- **인증서 갱신**: 갱신 후 kube-apiserver, kube-controller-manager, kube-scheduler, etcd 컨테이너를 멈추면 kubelet이 바로 다시 띄웁니다. 그동안 API 서버가 잠시 끊기며, `admin.conf`가 새로 만들어지므로 복사해 둔 kubeconfig는 다시 복사해야 합니다.
+- **노드 추가 명령**: 볼 때마다 새 부트스트랩 토큰(기본 24시간 유효)을 만들므로 확인을 거치고 감사 로그에 남깁니다.
+- **워커 노드**: API 서버가 원격이라 auto에서는 Host 탭이 꺼집니다. `cluster.host_management: enabled`로 켜면 kubelet·설정·컨테이너 관리만 쓸 수 있습니다.
 
 ## 화면 구성
 
@@ -301,11 +330,12 @@ Nodes, Events, Namespaces처럼 탭에 없는 리소스는 명령 모드(`:nodes
 | Service | `p` 포트포워딩 |
 | Node | `c` cordon, `u` uncordon, `D` drain |
 | Secret | `v` 값 보기 (감사 로그에 기록됩니다) |
-| Host › Service | `l` k3s 서비스 로그, `r` 재시작, `t` 중지, `a` 시작, `c` check-config, `J` 노드 추가 명령 |
-| Host › config.yaml | `v` 파일 보기, `e` 편집, `r` k3s 재시작 |
+| Host › Service | `l` 서비스 로그, `r` 재시작, `t` 중지, `a` 시작, `c` 점검(K3S: check-config, kubeadm: certs check-expiration), `J` 노드 추가 명령 |
+| Host › config.yaml / kubelet config | `v` 파일 보기, `e` 편집, `r` 서비스 재시작 |
+| Host › Static Pods (kubeadm) | `v` 보기, `e` 편집 |
 | Host › Manifests | `v` 보기, `s` `.skip` 전환 |
 | Host › Certificates | `v` 상세, `R` 인증서 갱신 |
-| Host › Backups | `b` 지금 백업, `R` 복원, `x` 삭제 |
+| Host › Backups | `b` 지금 백업, `R` 복원(K3S SQLite) 또는 복원 안내(etcd), `x` 삭제 |
 | Host › Containers | `i` inspect, `l` 로그 |
 | Host › Images | `i` inspect, `x` 삭제, `P` 미사용 이미지 정리 |
 | Helm › Releases | `v` values, `a` 전체 values, `m` manifest, `h` 이력, `R` 롤백, `x` 삭제 |
@@ -331,7 +361,8 @@ Nodes, Events, Namespaces처럼 탭에 없는 리소스는 명령 모드(`:nodes
 | `keybindings.yaml` | 공통 키와 작업 키 재정의 (작업 ID는 `?` 도움말 화면에 표시됩니다) |
 | `theme.yaml` | `dark` / `light` 색상 팔레트 |
 | `views.d/*.yaml` | 리소스별 표시 컬럼 재정의. 항목·path 문법·리소스별 내장 컬럼은 [conf/views.d/README.md](conf/views.d/README.md)에 있습니다 |
-| `examples/k3stui-k8s.yaml` | 일반 Kubernetes 클러스터용 설정 예제 |
+| `examples/k3stui-k8s.yaml` | 일반 Kubernetes(원격) 클러스터용 설정 예제 |
+| `examples/k3stui-kubeadm.yaml` | kubeadm 컨트롤 플레인 노드용 설정 예제 |
 
 자주 바꾸는 항목은 다음과 같습니다.
 
@@ -375,8 +406,10 @@ src/            Go 모듈
     app/        루트 모델: 탭·페이지 스택, 전역 키, 작업 실행 절차
     ui/         components(표·텍스트 뷰어·다이얼로그), styles, views(화면·소스·작업)
     kube/       client-go 래퍼: Informer 캐시, 리소스 정의, 작업, 포트포워딩, 메트릭
-    k3s/        K3S 호스트: systemd, config.yaml, 데이터스토어, manifest, 인증서
-    runtime/    containerd (k3s crictl)
+    host/       노드 관리 공통 인터페이스·타입 (systemd, 인증서, 파일 백업, 기능 목록)
+    k3s/        K3S 노드: k3s 서비스, config.yaml, SQLite·etcd, 자동 배포 manifest, 인증서
+    kubeadm/    kubeadm 노드: kubelet, kubelet 설정, static Pod, PKI, etcd 스냅샷, 노드 추가 토큰
+    runtime/    컨테이너 런타임 (crictl)
     helm/       helm CLI 래퍼
     config/     설정 로딩
     executil/   외부 명령 실행 (쉘 미사용, 타임아웃)

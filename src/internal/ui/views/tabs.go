@@ -57,7 +57,7 @@ func BuildTabs(env *Env) []TabDef {
 	}
 	// Host 탭은 K3S 서버 노드에서 실행할 때만 의미가 있습니다 (설정으로 강제 가능).
 	if env.HostEnabled {
-		tabs = append(tabs, TabDef{Key: "host", Name: "Host", Root: NewTablePage(env, "Host", HostSources()...)})
+		tabs = append(tabs, TabDef{Key: "host", Name: "Host", Root: NewTablePage(env, "Host", HostSources(env.Host)...)})
 	}
 	return append(tabs, TabDef{Key: "helm", Name: "Helm", Root: NewTablePage(env, "Helm", helm...)})
 }

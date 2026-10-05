@@ -31,8 +31,10 @@ jobs:
       - name: 릴리스 파일 모으기
         run: |
           mkdir release
-          # 압축본과 deb는 정적 바이너리라 Ubuntu 버전과 무관하므로 ubuntu-24.04 산출물을 씁니다
+          # 실행 파일·압축본·deb는 정적 바이너리라 Ubuntu 버전과 무관하므로 ubuntu-24.04 산출물을 씁니다
+          cp artifacts/dist-ubuntu-24.04/k3stui-*-linux-amd64 artifacts/dist-ubuntu-24.04/k3stui-*-linux-arm64 release/
           cp artifacts/dist-ubuntu-24.04/*.tar.gz artifacts/dist-ubuntu-24.04/*.deb release/
+          chmod +x release/k3stui-*-linux-amd64 release/k3stui-*-linux-arm64
           # rpm은 배포판별(el8·el9·el10)로 올립니다
           cp artifacts/dist-rhel-8/*.rpm artifacts/dist-rhel-9/*.rpm artifacts/dist-rhel-10/*.rpm release/
           (cd release && sha256sum -- * > SHA256SUMS)

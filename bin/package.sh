@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 배포용 압축본(tar.gz)과 패키지(.deb, .rpm)를 만듭니다. CI(GitHub Actions)와 로컬에서 같은 명령을 씁니다.
 #   사용법: bin/package.sh [--tar] [--deb] [--rpm el9] [--arch amd64,arm64] [--out dist]
-#   --tar         k3stui-<버전>-linux-<arch>.tar.gz (bin/install.sh로 설치)
+#   --tar         k3stui-<버전>-linux-<arch>.tar.gz (bin/install.sh로 설치)와 실행 파일 k3stui-<버전>-linux-<arch>
 #   --deb         k3stui_<패키지 버전>_<arch>.deb
 #   --rpm <dist>  k3stui-<패키지 버전>-1.<dist>.<arch>.rpm (dist 예: el8, el9, el10)
 #   --arch        대상 아키텍처 목록 (기본: amd64,arm64)
@@ -80,7 +80,9 @@ for arch in "${ARCH_LIST[@]}"; do
     cp "$BASE/README.md" "$stage/$name/"
     tar -C "$stage" --owner=0 --group=0 -czf "$OUT/$name.tar.gz" "$name"
     rm -rf "$stage"
-    echo "  ✓ $name.tar.gz"
+    # 압축을 풀지 않고 바로 받아 쓸 수 있는 실행 파일 (정적 바이너리)
+    install -m 0755 "$bin" "$OUT/$name"
+    echo "  ✓ $name.tar.gz, $name"
   fi
 
   pkg() {  # pkg <deb|rpm> <release>
@@ -92,6 +94,6 @@ for arch in "${ARCH_LIST[@]}"; do
   if [[ -n "$RPM_DIST" ]]; then pkg rpm "1.$RPM_DIST"; echo "  ✓ rpm ($RPM_DIST)"; fi
 done
 
-(cd "$OUT" && sha256sum -- *.tar.gz *.deb *.rpm 2>/dev/null > SHA256SUMS || true)
+(cd "$OUT" && sha256sum -- k3stui-*-linux-amd64 k3stui-*-linux-arm64 *.tar.gz *.deb *.rpm 2>/dev/null > SHA256SUMS || true)
 echo "✓ 산출물: $OUT"
 ls -1 "$OUT"

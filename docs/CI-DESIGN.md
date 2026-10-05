@@ -178,6 +178,8 @@ e2e 작업은 TUI 화면 조작(tmux)까지는 하지 않고, 비대화형 옵�
 산출물 예 (`v1.2.0`):
 
 ```
+k3stui-v1.2.0-linux-amd64              # 실행 파일 (정적 바이너리, 받아서 바로 실행)
+k3stui-v1.2.0-linux-arm64
 k3stui-v1.2.0-linux-amd64.tar.gz      # 바이너리 + bin/ + conf/ (bin/install.sh로 설치)
 k3stui-v1.2.0-linux-arm64.tar.gz
 k3stui_1.2.0-1_amd64.deb               # Ubuntu 22.04·24.04·26.04 공용 (정적 바이너리)

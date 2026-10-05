@@ -470,7 +470,7 @@ GitHub Actions가 Ubuntu 22.04·24.04·26.04와 RHEL 8·9·10(UBI)에서 각각 
 | 워크플로 | 실행 시점 | 내용 |
 |---|---|---|
 | `ci` | PR, main 푸시, 수동 실행 | gofmt·vet·테스트 → 배포판 6개 빌드·패키징 → 깨끗한 컨테이너에서 설치 검증 → (main) K3s·kubeadm 통합 테스트 |
-| `release` | `v*` 태그 푸시 | `ci`와 같은 검증 후 GitHub Release에 tar.gz·deb·rpm·SHA256SUMS 업로드 (`v1.0.0-rc.1`처럼 `-`가 있으면 prerelease) |
+| `release` | `v*` 태그 푸시 | `ci`와 같은 검증 후 GitHub Release에 실행 파일(amd64·arm64)·tar.gz·deb·rpm·SHA256SUMS 업로드 (`v1.0.0-rc.1`처럼 `-`가 있으면 prerelease) |
 
 로컬에서도 같은 스크립트로 패키지를 만들고 검증할 수 있습니다.
 

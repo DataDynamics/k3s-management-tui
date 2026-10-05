@@ -13,18 +13,19 @@ fail() { echo "✕ $*" >&2; exit 1; }
 
 if command -v dpkg >/dev/null && [[ "${ID_LIKE:-} $ID" == *debian* ]]; then
   KIND=deb
-  PKG="$(ls "$DIR"/k3stui_*_amd64.deb | head -1)"
+  pkgs=("$DIR"/k3stui_*_amd64.deb); PKG="${pkgs[0]}"
   install_pkg() { dpkg -i "$PKG"; }
   reinstall_pkg() { dpkg -i "$PKG"; }       # 비대화형에서 dpkg는 사용자가 고친 conffile을 유지합니다
   remove_pkg() { dpkg -r k3stui; }
 else
   KIND=rpm
   EL="el${VERSION_ID%%.*}"
-  PKG="$(ls "$DIR"/k3stui-*."$EL".x86_64.rpm | head -1)"
+  pkgs=("$DIR"/k3stui-*."$EL".x86_64.rpm); PKG="${pkgs[0]}"
   install_pkg() { rpm -ivh "$PKG"; }
   reinstall_pkg() { rpm -Uvh --replacepkgs "$PKG"; }
   remove_pkg() { rpm -e k3stui; }
 fi
+[[ -f "$PKG" ]] || fail "패키지를 찾지 못했습니다: $PKG"
 echo "배포판: $PRETTY_NAME · 패키지: $(basename "$PKG")"
 
 step "설치"
@@ -39,14 +40,18 @@ step "실행"
 ver="$(k3stui --version)"
 echo "$ver"
 if [[ -n "$EXPECT" && "$ver" != "k3stui $EXPECT" ]]; then fail "버전이 다릅니다: $ver (기대: $EXPECT)"; fi
-k3stui --columns pods | grep -q "내장 컬럼" || fail "--columns 출력이 이상합니다"
+# 출력을 먼저 받은 뒤 검사합니다. "명령 | grep -q"는 grep이 먼저 끝나면 명령이 SIGPIPE를 받아
+# pipefail에서 간헐적으로 실패합니다.
+cols="$(k3stui --columns pods)"
+grep -q "내장 컬럼" <<<"$cols" || fail "--columns 출력이 이상합니다"
 out="$(k3stui --check)" || fail "--check 실패"
-echo "$out" | grep -q "설정 파일.*/opt/k3stui/conf/k3stui.yaml" || fail "설치된 설정 파일을 읽지 않았습니다:\n$out"
-echo "$out" | grep -q "kubeconfig" || fail "--check 출력에 kubeconfig 항목이 없습니다"
+grep -q "설정 파일.*/opt/k3stui/conf/k3stui.yaml" <<<"$out" || fail "설치된 설정 파일을 읽지 않았습니다:\n$out"
+grep -q "kubeconfig" <<<"$out" || fail "--check 출력에 kubeconfig 항목이 없습니다"
 for ex in /opt/k3stui/conf/examples/*.yaml; do
   k3stui --config "$ex" --check >/dev/null || fail "예제 설정을 읽지 못했습니다: $ex"
 done
-echo "✓ --version, --columns, --check, 예제 설정 $(ls /opt/k3stui/conf/examples/*.yaml | wc -l)개"
+examples=(/opt/k3stui/conf/examples/*.yaml)
+echo "✓ --version, --columns, --check, 예제 설정 ${#examples[@]}개"
 
 step "설정 보존 (재설치)"
 echo "# test-install: local edit" >> /opt/k3stui/conf/k3stui.yaml

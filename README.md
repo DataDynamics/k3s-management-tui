@@ -1,17 +1,27 @@
 # K3s & K8s Management TUI (k3stui)
 
-K3s & K8s 서버를 터미널 하나에서 관리하는 TUI입니다.
+K3s와 Kubernetes(K8s) 클러스터를 터미널 하나에서 관리하는 TUI입니다.
 
-k9s처럼 Kubernetes 리소스를 다루는 기능에 더해, 일반 도구가 다루지 않는 **K3S 호스트 쪽 관리 기능**을 함께 제공합니다.
-systemd 서비스 제어, `config.yaml` 편집, 데이터스토어 백업·복원, 자동 배포 manifest, 인증서, containerd 이미지·컨테이너를 한 화면에서 관리할 수 있습니다.
+k9s처럼 Pod, Deployment, Service 같은 **Kubernetes 리소스**를 다루는 데 그치지 않고,
+일반 도구가 다루지 않는 **노드(호스트) 관리**까지 한 화면에서 합니다.
+서비스 제어와 로그, 설정 파일 편집, 데이터스토어 백업, 인증서 갱신, 노드 추가 명령, containerd 이미지·컨테이너 정리를 TUI 안에서 처리할 수 있습니다.
 
-**RKE2** 노드는 K3S와 같은 방식으로, **kubeadm** 노드는 kubelet·static Pod·PKI 인증서·etcd 스냅샷·노드 추가 토큰으로 관리합니다.
-그 밖의 Kubernetes(EKS·GKE·AKS 같은 관리형 클러스터, 원격 클러스터 등)에도 붙일 수 있으며, 이때는 호스트 관리 기능을 빼고 리소스 관리 기능만 제공합니다.
+노드 관리는 TUI를 실행한 노드의 배포판을 자동으로 판별해 그에 맞게 구성합니다.
+
+| 배포판 | 리소스 관리 | 노드 관리 (Host 탭) |
+|---|---|---|
+| **K3s** | 지원 | k3s 서비스, config.yaml, 자동 배포 manifest, SQLite·etcd 백업과 SQLite 복원, 인증서 갱신, 노드 추가 명령 |
+| **RKE2** | 지원 | rke2-server/agent 서비스, config.yaml, 자동 배포 manifest, etcd 스냅샷, 인증서 갱신, 노드 추가 명령 |
+| **kubeadm** | 지원 | kubelet 서비스와 설정, static Pod 편집, PKI 인증서 갱신, etcd 스냅샷, 노드 추가 토큰 |
+| 그 밖의 Kubernetes (EKS·GKE·AKS 등 관리형, 원격 클러스터) | 지원 | 없음 |
+
+노드 관리는 API 서버가 있는 노드에서 실행할 때 켜지며, 서비스 제어·편집·백업 같은 변경 작업에는 root 권한이 필요합니다.
+원격에서 접속하거나 그 밖의 배포판이면 리소스 관리 기능만 씁니다.
 자세한 내용은 [다른 Kubernetes 클러스터에서 사용](#다른-kubernetes-클러스터에서-사용)을 참고하세요.
 
 - 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
 - 컬럼 재정의: [conf/views.d/README.md](conf/views.d/README.md)
-- k8s용 설정 예제: [conf/examples/k3stui-k8s.yaml](conf/examples/k3stui-k8s.yaml)
+- 설정 예제: [원격·관리형 클러스터](conf/examples/k3stui-k8s.yaml), [RKE2 노드](conf/examples/k3stui-rke2.yaml), [kubeadm 노드](conf/examples/k3stui-kubeadm.yaml)
 - 화면별 스크린샷: [스크린샷](#스크린샷)
 
 ![대시보드](docs/images/dashboard.png)

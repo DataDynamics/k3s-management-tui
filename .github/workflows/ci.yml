@@ -1,4 +1,4 @@
-# k3stui CI — 설계: docs/CI-DESIGN.md
+# k3stui CI — 설계: docs/superpowers/specs/2026-10-06-ci-github-actions-design.md
 #   check        gofmt·go vet·단위 테스트 (1회)
 #   build        Ubuntu 22.04·24.04·26.04, RHEL 8·9·10(UBI)에서 각각 빌드·테스트·패키징
 #   install-test 깨끗한 배포판 컨테이너에 패키지를 설치해 실행·설정 보존·제거 확인

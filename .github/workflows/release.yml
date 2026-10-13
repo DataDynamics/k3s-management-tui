@@ -1,4 +1,4 @@
-# k3stui 릴리스 — 설계: docs/CI-DESIGN.md 4.6
+# k3stui 릴리스 — 설계: docs/superpowers/specs/2026-10-06-ci-github-actions-design.md 4.6
 # v* 태그를 푸시하면 ci.yml과 같은 빌드·설치 검증·통합 테스트를 거친 뒤 GitHub Release에 산출물을 올립니다.
 #   v1.2.0       → 정식 릴리스
 #   v1.2.0-rc.1  → 시험 릴리스 (prerelease로 표시)

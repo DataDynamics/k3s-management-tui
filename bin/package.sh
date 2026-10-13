@@ -31,7 +31,7 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
 # ---- 버전 ----
-# git describe 결과를 deb·rpm 버전 비교 규칙에 맞게 바꿉니다 (CI-DESIGN 6장).
+# git describe 결과를 deb·rpm 버전 비교 규칙에 맞게 바꿉니다 (docs/superpowers/specs/2026-10-06-ci-github-actions-design.md 6장).
 #   v1.2.0               → 1.2.0
 #   v1.2.0-rc.1          → 1.2.0~rc.1          (~는 정식 버전보다 앞서 정렬됩니다)
 #   v1.2.0-3-gabc1234    → 1.2.0+3.gabc1234

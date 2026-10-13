@@ -19,7 +19,7 @@ k9s처럼 Pod, Deployment, Service 같은 **Kubernetes 리소스**를 다루는 
 원격에서 접속하거나 그 밖의 배포판이면 리소스 관리 기능만 씁니다.
 자세한 내용은 [다른 Kubernetes 클러스터에서 사용](#다른-kubernetes-클러스터에서-사용)을 참고하세요.
 
-- 설계 문서: [docs/DESIGN.md](docs/DESIGN.md)
+- 설계 문서: [docs/DESIGN.md](docs/DESIGN.md) (현재 상태), [docs/superpowers/](docs/superpowers/README.md) (기능별 설계·계획 기록)
 - 컬럼 재정의: [conf/views.d/README.md](conf/views.d/README.md)
 - 설정 예제: [원격·관리형 클러스터](conf/examples/k3stui-k8s.yaml), [RKE2 노드](conf/examples/k3stui-rke2.yaml), [kubeadm 노드](conf/examples/k3stui-kubeadm.yaml)
 - 화면별 스크린샷: [스크린샷](#스크린샷)
@@ -465,7 +465,7 @@ cd src && go test -tags e2e ./internal/kube/ -v       # 실제 K3s 대상 통합
 
 ## 빌드와 배포 (CI)
 
-GitHub Actions가 Ubuntu 22.04·24.04·26.04와 RHEL 8·9·10(UBI)에서 각각 빌드·테스트하고 패키지를 만듭니다. 설계는 [docs/CI-DESIGN.md](docs/CI-DESIGN.md)에 있습니다.
+GitHub Actions가 Ubuntu 22.04·24.04·26.04와 RHEL 8·9·10(UBI)에서 각각 빌드·테스트하고 패키지를 만듭니다. 설계는 [CI 설계 문서](docs/superpowers/specs/2026-10-06-ci-github-actions-design.md)에 있습니다.
 
 | 워크플로 | 실행 시점 | 내용 |
 |---|---|---|
